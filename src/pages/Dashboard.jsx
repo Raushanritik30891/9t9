@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react';
 import { auth, db } from '../firebase';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { collection, query, where, onSnapshot, getDoc, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, getDoc, doc, updateDoc, serverTimestamp, orderBy } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
-import { Clock, CheckCircle, XCircle, MessageSquare, AlertTriangle, FileText, User, LogOut, Copy, Eye, Bell } from 'lucide-react';
+import { Clock, CheckCircle, XCircle, MessageSquare, AlertTriangle, FileText, User, LogOut, Copy, Eye, Bell, Mail } from 'lucide-react';
 import { signOut } from 'firebase/auth';
 import Navbar from '../components/Navbar';
 import Footer from '../components/Footer';
-import toast from 'react-hot-toast'; // ✅ ADD THIS LINE
+import toast from 'react-hot-toast';
 
 const Dashboard = () => {
   const [user, loading] = useAuthState(auth);
@@ -15,7 +15,9 @@ const Dashboard = () => {
   const [contactMessages, setContactMessages] = useState([]);
   const [matchesData, setMatchesData] = useState({}); // To store match details like Rules
   const [profileData, setProfileData] = useState({ gameName: '', uid: '' });
-  const [activeTab, setActiveTab] = useState('matches'); // matches | notifications | profile
+  const [activeTab, setActiveTab] = useState('matches'); // matches | inbox | notifications | profile
+  const [inboxMessages, setInboxMessages] = useState([]); // ✅ NEW: For Admin Messages
+  const [unreadCount, setUnreadCount] = useState(0); // ✅ NEW: Unread message count
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -64,11 +66,60 @@ const Dashboard = () => {
         setContactMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
+    // ✅ 4. FETCH USER INBOX MESSAGES (NEW)
+    const qInbox = query(
+      collection(db, "user_inbox"), 
+      where("userId", "==", user.uid),
+      orderBy("timestamp", "desc")
+    );
+const unsubInbox = onSnapshot(qInbox, async (snapshot) => {
+  const messages = snapshot.docs.map(d => ({ 
+    id: d.id, 
+    ...d.data(),
+    timestamp: d.data().timestamp
+  }));
+  setInboxMessages(messages);
+  
+  // Unread messages count
+  const unread = messages.filter(msg => !msg.read).length;
+  setUnreadCount(unread);
+  
+  // Mark messages as read when user opens inbox tab
+  if (activeTab === 'inbox' && unread > 0) {
+    const markAsReadPromises = messages.map(async (msg) => {
+      if (!msg.read) {
+        try {
+          await updateDoc(doc(db, "user_inbox", msg.id), {
+            read: true,
+            readAt: serverTimestamp()
+          });
+        } catch (error) {
+          console.error("Error marking message as read:", error);
+        }
+      }
+    });
+    
+    // Run all promises but don't wait for all to complete
+    Promise.allSettled(markAsReadPromises).catch(error => {
+      console.error("Error in mark as read:", error);
+    });
+  }
+});
+
     return () => { 
       unsubBookings(); 
       unsubContact(); 
+      unsubInbox(); // ✅ NEW: Cleanup inbox subscription
     };
-  }, [user, loading, navigate]);
+  }, [user, loading, navigate, activeTab]); // ✅ Added activeTab dependency
+
+  useEffect(() => {
+    // Reset unread count when inbox tab is active
+    if (activeTab === 'inbox' && unreadCount > 0) {
+      // The unread count will be updated by the snapshot listener
+      // when messages are marked as read
+    }
+  }, [activeTab, unreadCount]);
 
   const handleLogout = async () => {
     try {
@@ -78,7 +129,7 @@ const Dashboard = () => {
       console.error("Error logging out:", error);
     }
   };
-
+  
   if (loading) return <div className="h-screen bg-black flex items-center justify-center text-white">Loading...</div>;
 
   return (
@@ -119,6 +170,10 @@ const Dashboard = () => {
                     <span className="text-brand-green font-bold">{myBookings.length}</span>
                   </div>
                   <div className="bg-black/50 px-3 py-1 rounded border border-white/10">
+                    <span className="text-xs text-gray-500 uppercase block">Messages</span>
+                    <span className="text-brand-green font-bold">{inboxMessages.length}</span>
+                  </div>
+                  <div className="bg-black/50 px-3 py-1 rounded border border-white/10">
                     <span className="text-xs text-gray-500 uppercase block">Status</span>
                     <span className="text-green-500 font-bold text-xs">ACTIVE</span>
                   </div>
@@ -142,6 +197,16 @@ const Dashboard = () => {
               className={`px-4 py-2 font-bold text-sm ${activeTab === 'matches' ? 'text-white border-b-2 border-brand-green' : 'text-gray-500 hover:text-white'}`}
             >
               MY MATCHES
+            </button>
+            <button 
+              onClick={() => setActiveTab('inbox')} 
+              className={`px-4 py-2 font-bold text-sm ${activeTab === 'inbox' ? 'text-white border-b-2 border-brand-green' : 'text-gray-500 hover:text-white'}`}
+            >
+              INBOX {unreadCount > 0 && (
+                <span className="ml-2 bg-red-600 text-white text-[10px] px-2 py-0.5 rounded-full">
+                  {unreadCount} NEW
+                </span>
+              )}
             </button>
             <button 
               onClick={() => setActiveTab('notifications')} 
@@ -231,7 +296,7 @@ const Dashboard = () => {
                                     className="text-brand-green cursor-pointer hover:scale-110" 
                                     onClick={() => {
                                       navigator.clipboard.writeText(match.roomId);
-                                      alert("Room ID copied!");
+                                      toast.success("Room ID copied!");
                                     }}
                                   />
                                 </div>
@@ -246,7 +311,7 @@ const Dashboard = () => {
                                       className="text-brand-green cursor-pointer hover:scale-110" 
                                       onClick={() => {
                                         navigator.clipboard.writeText(match.password);
-                                        alert("Password copied!");
+                                        toast.success("Password copied!");
                                       }}
                                     />
                                   )}
@@ -293,6 +358,128 @@ const Dashboard = () => {
                       className="mt-4 text-brand-green text-sm underline hover:text-white"
                     >
                       Find a Match
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB CONTENT: INBOX (NEW) */}
+          {activeTab === 'inbox' && (
+            <div className="space-y-6">
+              <h2 className="text-2xl font-gaming text-white mb-6 flex items-center gap-3">
+                <Mail className="text-brand-green"/> ADMIN MESSAGES
+                {unreadCount > 0 && (
+                  <span className="bg-red-600 text-white text-xs px-3 py-1 rounded-full">
+                    {unreadCount} UNREAD
+                  </span>
+                )}
+              </h2>
+              
+              <div className="space-y-4">
+                {inboxMessages.map((message) => (
+                  <div 
+                    key={message.id} 
+                    className={`bg-[#111] rounded-2xl border ${message.read ? 'border-white/5' : 'border-brand-green/30'} overflow-hidden relative transition-all duration-300 hover:border-brand-green/50`}
+                    id={`message-${message.id}`}
+                  >
+                    {!message.read && (
+                      <div className="absolute top-4 right-4 flex items-center gap-2">
+                        <div className="w-3 h-3 bg-red-500 rounded-full animate-pulse"></div>
+                        <span className="bg-brand-green text-black text-[10px] px-2 py-0.5 rounded-full font-bold">
+                          NEW
+                        </span>
+                      </div>
+                    )}
+                    
+                    <div className="p-6">
+                      <div className="flex flex-col md:flex-row md:justify-between md:items-start mb-4">
+                        <div>
+                          <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-1">
+                            {message.title || "Admin Message"}
+                            {message.type === 'direct' && (
+                              <span className="bg-brand-green/20 text-brand-green text-xs px-2 py-1 rounded">TOURNAMENT UPDATE</span>
+                            )}
+                            {message.type === 'reply' && (
+                              <span className="bg-blue-500/20 text-blue-500 text-xs px-2 py-1 rounded">SUPPORT REPLY</span>
+                            )}
+                          </h3>
+                          <p className="text-gray-400 text-sm">
+                            {message.timestamp?.seconds ? 
+                              new Date(message.timestamp.seconds * 1000).toLocaleString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit'
+                              }) : 
+                              "Recently"}
+                          </p>
+                        </div>
+                        
+                        <div className="mt-2 md:mt-0">
+                          {message.read ? (
+                            <span className="text-gray-500 text-xs flex items-center gap-1">
+                              <CheckCircle size={12}/> Read
+                            </span>
+                          ) : (
+                            <span className="text-brand-green text-xs flex items-center gap-1">
+                              <Bell size={12}/> Unread
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      <div className="bg-black/30 p-4 rounded-lg border border-white/5 mt-3">
+                        <p className="text-gray-300 whitespace-pre-line leading-relaxed">
+                          {message.message}
+                        </p>
+                      </div>
+                      
+                      {message.tournamentId && (
+                        <div className="mt-4 flex gap-3">
+                          <button 
+                            onClick={() => {
+                              setActiveTab('matches');
+                              setTimeout(() => {
+                                const bookingElement = document.getElementById(`booking-${message.tournamentId}`);
+                                if (bookingElement) {
+                                  bookingElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                  bookingElement.classList.add('ring-2', 'ring-brand-green', 'ring-opacity-50');
+                                  setTimeout(() => {
+                                    bookingElement.classList.remove('ring-2', 'ring-brand-green', 'ring-opacity-50');
+                                  }, 3000);
+                                }
+                              }, 100);
+                            }}
+                            className="text-brand-green hover:text-white text-sm flex items-center gap-2 bg-brand-green/10 hover:bg-brand-green/20 px-3 py-1.5 rounded transition"
+                          >
+                            <Clock size={14}/>
+                            View Related Match
+                          </button>
+                          
+                          {matchesData[message.tournamentId] && (
+                            <span className="text-gray-400 text-sm flex items-center gap-2">
+                              Match: {matchesData[message.tournamentId]?.title?.substring(0, 30)}...
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                
+                {inboxMessages.length === 0 && (
+                  <div className="text-center py-20 border border-dashed border-white/10 rounded-2xl bg-[#111]">
+                    <MessageSquare className="mx-auto text-gray-600 mb-2" size={48}/>
+                    <p className="text-gray-500">No messages from admin yet.</p>
+                    <p className="text-gray-600 text-sm mt-1">You'll see tournament updates and support replies here.</p>
+                    <button 
+                      onClick={() => navigate('/contact')}
+                      className="mt-4 text-brand-green text-sm underline hover:text-white"
+                    >
+                      Contact Admin
                     </button>
                   </div>
                 )}

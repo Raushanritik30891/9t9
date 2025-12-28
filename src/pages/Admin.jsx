@@ -298,40 +298,55 @@ const Admin = () => {
           toast.error("Failed to update status");
       }
   };
+  
 
   // --- NEW: Send Message to User ---
-  const handleSendMessage = async (bookingId) => {
-      if(!messageText) return;
-      
-      try {
-          await updateDoc(doc(db, "bookings", bookingId), {
-              adminMessage: messageText,
-              messageTime: new Date(),
-              lastUpdated: new Date()
-          });
-          
-          const booking = bookings.find(b => b.id === bookingId);
-          if (booking) {
-              await addDoc(collection(db, "notifications"), {
-                  userId: booking.userId,
-                  title: "📨 Admin Message",
-                  message: `Admin sent you a message: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`,
-                  read: false,
-                  timestamp: new Date()
-              });
-          }
-          
-          await logAction(`Sent message to booking ${bookingId}: ${messageText.substring(0, 30)}...`);
-          
-          setMessageText('');
-          setSelectedBookingId(null);
-          toast.success("Message Sent to User!");
-      } catch (error) {
-          console.error("Error sending message:", error);
-          toast.error("Failed to send message");
-      }
-  };
-
+const handleSendMessage = async (bookingId) => {
+    if(!messageText) return;
+    
+    try {
+        const booking = bookings.find(b => b.id === bookingId);
+        
+        if (booking) {
+            // 1. Booking me message save karo (existing functionality)
+            await updateDoc(doc(db, "bookings", bookingId), {
+                adminMessage: messageText,
+                messageTime: new Date(),
+                lastUpdated: new Date()
+            });
+            
+            // 2. Purana notification bhi send karein
+            await addDoc(collection(db, "notifications"), {
+                userId: booking.userId,
+                title: "📨 Admin Message",
+                message: `Admin sent you a message: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`,
+                read: false,
+                timestamp: new Date()
+            });
+            
+            // 3. Naya user_inbox me bhi save karein (User ke Inbox tab mein dikhega)
+            await addDoc(collection(db, "user_inbox"), {
+                userId: booking.userId,
+                title: "Tournament Update 🏆",
+                message: messageText,
+                type: 'direct',
+                tournamentId: booking.tournamentId,
+                timestamp: new Date(),
+                read: false
+            });
+            
+            await logAction(`Sent message to player ${booking.playerName}`);
+            setMessageText('');
+            setSelectedBookingId(null);
+            toast.success("Message sent successfully! 📨");
+        } else {
+            toast.error("Booking not found");
+        }
+    } catch (error) {
+        console.error("Error sending message:", error);
+        toast.error("Failed to send message");
+    }
+};
   // --- C. ID/PASS RELEASE ---
   const saveIdPass = async () => {
       if (!selectedMatch) return;
@@ -428,37 +443,58 @@ const Admin = () => {
       setIsUploading(false);
   };
 
-  // --- F. MESSAGE REPLY ---
-  const handleReplyToMessage = async () => {
-      if (!selectedMessage || !replyText) return;
+// --- F. MESSAGE REPLY ---
+const handleReplyToMessage = async () => {
+    if (!selectedMessage || !replyText) return;
 
-      if (selectedMessage.userId) {
-          await addDoc(collection(db, "notifications"), {
-              userId: selectedMessage.userId,
-              title: "💬 Admin Reply",
-              message: `Replying to your query:\n"${selectedMessage.message.substring(0, 50)}..."\n\nAdmin: ${replyText}`,
-              read: false,
-              timestamp: new Date()
-          });
-      }
+    try {
+        // 1. Purana notification bhi send karein (backward compatibility)
+        if (selectedMessage.userId) {
+            await addDoc(collection(db, "notifications"), {
+                userId: selectedMessage.userId,
+                title: "💬 Admin Reply",
+                message: `Replying to your query:\n"${selectedMessage.message.substring(0, 50)}..."\n\nAdmin: ${replyText}`,
+                read: false,
+                timestamp: new Date()
+            });
+            
+            // 2. Naya user_inbox me bhi save karein
+            await addDoc(collection(db, "user_inbox"), {
+                userId: selectedMessage.userId,
+                title: "Admin Reply 💬",
+                message: `Your Question: ${selectedMessage.message}\n\nAdmin Response: ${replyText}`,
+                type: 'reply',
+                timestamp: new Date(),
+                read: false
+            });
+        }
 
-      await updateDoc(doc(db, "contact_messages", selectedMessage.id), { status: 'replied' });
-      
+        // Contact message status update karo
+        await updateDoc(doc(db, "contact_messages", selectedMessage.id), { 
+            status: 'replied',
+            adminReply: replyText,
+            repliedAt: new Date()
+        });
+        
+        await logAction(`Replied to ${selectedMessage.name}`);
+        setReplyText("");
+        setShowReplyModal(false);
+        toast.success("Reply sent to user! ✅");
+
+    } catch (error) {
+        console.error(error);
+        toast.error("Failed to send reply");
+    }
+};
+
+const handleDeleteMessage = async (id) => {
+    if(confirm("Delete this message?")) {
+      await deleteDoc(doc(db, "contact_messages", id));
       // Log the action
-      await logAction(`Replied to message from ${selectedMessage.name}`);
-      
-      setReplyText("");
-      setShowReplyModal(false);
-      toast.success("Reply Sent Successfully! ✅");
-  };
+      await logAction(`Deleted a contact message`);
+    }
+};
 
-  const handleDeleteMessage = async (id) => {
-      if(confirm("Delete this message?")) {
-        await deleteDoc(doc(db, "contact_messages", id));
-        // Log the action
-        await logAction(`Deleted a contact message`);
-      }
-  };
 
   // --- G. ADMIN MANAGEMENT FUNCTIONS (NEW) ---
   const handleCreateAdmin = async (e) => {
