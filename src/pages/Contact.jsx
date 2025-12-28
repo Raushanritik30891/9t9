@@ -22,10 +22,10 @@ const Contact = () => {
         timestamp: new Date(),
         status: 'unread'
       });
-      alert("Message Sent! We will contact you shortly. ✅");
+      toast.success("Message Sent! We will contact you shortly. ✅");
       setFormData({ name: '', email: '', message: '' });
     } catch (error) {
-      alert("Error sending message.");
+      toast.error("Error sending message.");
     }
     setLoading(false);
   };
