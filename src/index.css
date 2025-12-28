@@ -1,0 +1,70 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-green: #00ff41;
+  --brand-dark: #0a0a0a;
+}
+
+body {
+  background-color: var(--brand-dark);
+  color: white;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+}
+
+/* --- GAMING BACKGROUND (FF STYLE) --- */
+.bg-gaming-grid {
+  background-image: 
+    linear-gradient(to bottom, rgba(0,0,0,0.8), #000000),
+    url('https://wallpapers.com/images/hd/free-fire-dark-4k-mobile-am7-1080-x-1920-u77t8b4y2d9y2d9y.jpg'); /* Dark FF Background */
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+}
+
+/* --- NEON GLOW UTILS --- */
+.text-glow {
+  text-shadow: 0 0 10px rgba(0, 255, 65, 0.5), 0 0 20px rgba(0, 255, 65, 0.3);
+}
+
+.box-glow:hover {
+  box-shadow: 0 0 20px rgba(0, 255, 65, 0.2), inset 0 0 10px rgba(0, 255, 65, 0.1);
+}
+
+/* --- CUSTOM FONTS --- */
+@font-face {
+  font-family: 'Gaming';
+  src: url('https://fonts.cdnfonts.com/s/18260/Valorant Font.woff') format('woff');
+}
+
+.font-gaming {
+  font-family: 'Gaming', sans-serif;
+  letter-spacing: 2px;
+}
+/* --- EXISTING CODE KE NEECHE YE ADD KAREIN --- */
+
+/* 1. Moving Grid Animation */
+@keyframes moveGrid {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(50px); }
+}
+
+.bg-moving-grid {
+  background-size: 50px 50px;
+  background-image: 
+    linear-gradient(to right, rgba(0, 255, 65, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 255, 65, 0.05) 1px, transparent 1px);
+  animation: moveGrid 3s linear infinite;
+  mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+}
+
+/* 2. Floating Particles (Embers) */
+.particle-container {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  z-index: 0;
+}
