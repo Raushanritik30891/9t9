@@ -43,7 +43,7 @@ const Navbar = () => {
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => navigate('/')}>
           <img src={logoImg} alt="9T9" className="h-10 w-auto object-contain hover:scale-105 transition" />
           <h1 className="font-gaming text-xl tracking-widest leading-none text-white block">
-            9T9<span className="text-brand-green">ESPORTS</span>
+            9T9<span className="text-brand-green"> E-Sports</span>
           </h1>
         </div>
 

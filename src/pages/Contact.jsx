@@ -49,11 +49,11 @@ const Contact = () => {
                 <div className="space-y-6">
                     <div className="flex items-center gap-4">
                         <div className="bg-brand-green/10 p-3 rounded-lg text-brand-green"><Mail size={24}/></div>
-                        <div><p className="text-xs text-gray-500 uppercase font-bold">Email Us</p><p className="text-lg">help@9t9esports.com</p></div>
+                        <div><p className="text-xs text-gray-500 uppercase font-bold">Email Us</p><p className="text-lg">9t9tournaments@gmail.com</p></div>
                     </div>
                     <div className="flex items-center gap-4">
                         <div className="bg-blue-500/10 p-3 rounded-lg text-blue-500"><MessageCircle size={24}/></div>
-                        <div><p className="text-xs text-gray-500 uppercase font-bold">WhatsApp Support</p><p className="text-lg">+91 98765 43210</p></div>
+                        <div><p className="text-xs text-gray-500 uppercase font-bold">WhatsApp Support</p><p className="text-lg">+91 790-340-1877</p></div>
                     </div>
                     <div className="flex items-center gap-4">
                         <div className="bg-purple-500/10 p-3 rounded-lg text-purple-500"><MapPin size={24}/></div>

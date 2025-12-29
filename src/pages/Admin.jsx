@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
-import { db, auth, SUPER_ADMIN_EMAIL, verifyAdmin,logActivity } from '../firebase'; // Updated import
+import { db, auth, SUPER_ADMIN_EMAIL, verifyAdmin, logActivity } from '../firebase';
 import { 
   collection, addDoc, deleteDoc, doc, onSnapshot, updateDoc, 
-setDoc, getDoc, getDocs, query, orderBy, where, writeBatch, 
-arrayUnion, arrayRemove, increment, serverTimestamp
+  setDoc, getDoc, getDocs, query, orderBy, where, writeBatch, 
+  arrayUnion, arrayRemove, increment, serverTimestamp, runTransaction
 } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -12,9 +12,9 @@ import {
   X, Layers, Key, CheckCircle, Bell, Eye, 
   List, Image as ImageIcon, BarChart2, Settings, 
   Upload, Check, MessageSquare, Send, Home,
-  Shield, UserPlus, Activity, Clock, XCircle // Added Clock, XCircle
+  Shield, UserPlus, Activity, Clock, XCircle,
+  CreditCard, Edit
 } from 'lucide-react';
-
 
 // ✅ CLOUDINARY CONFIGURATION
 const CLOUDINARY_CLOUD_NAME = "dvmla7g1o";
@@ -24,7 +24,7 @@ const Admin = () => {
   const navigate = useNavigate();
   
   // ==========================
-  // 1. SECURITY CHECK (UPDATED) - Now with role verification
+  // 1. SECURITY CHECK
   // ==========================
   const [userRole, setUserRole] = useState(null);
   const [userName, setUserName] = useState('');
@@ -34,22 +34,20 @@ const Admin = () => {
       const user = auth.currentUser;
       
       if (!user) {
-        navigate('/admin-login'); // Redirect to admin login if not authenticated
+        navigate('/admin-login');
         return;
       }
       
-      // Verify if user is admin
       const adminInfo = await verifyAdmin(user.email);
       
       if (!adminInfo) {
-        navigate('/'); // Not an admin, go to home
+        navigate('/');
         return;
       }
       
       setUserRole(adminInfo.role);
       setUserName(adminInfo.name);
       
-      // Log login activity
       await logActivity(db, user.email, `Logged into admin panel`);
     };
 
@@ -58,44 +56,44 @@ const Admin = () => {
   }, [navigate]);
   
   // ==========================
-  // 2. STATE MANAGEMENT (WITH NEW STATES)
+  // 2. STATE MANAGEMENT
   // ==========================
   
   // Data States
   const [tournaments, setTournaments] = useState([]);
   const [bookings, setBookings] = useState([]);
-  const [messages, setMessages] = useState([]); // Contact Messages
+  const [messages, setMessages] = useState([]);
   const [tickers, setTickers] = useState([]); 
-  const [adminList, setAdminList] = useState([]); // NEW: Admin list
-  const [logs, setLogs] = useState([]); // NEW: Activity logs
+  const [adminList, setAdminList] = useState([]);
+  const [logs, setLogs] = useState([]);
   
   // Navigation State
   const [activeSection, setActiveSection] = useState('dashboard');
 
-  // Modal (Popup) Visibility States
+  // Modal States
   const [showIdModal, setShowIdModal] = useState(false);
   const [showSlotModal, setShowSlotModal] = useState(false); 
   const [showResultModal, setShowResultModal] = useState(false); 
   const [showNotifyModal, setShowNotifyModal] = useState(false); 
-  const [showReplyModal, setShowReplyModal] = useState(false); // Reply Modal
-  const [showCreateAdminModal, setShowCreateAdminModal] = useState(false); // NEW: Create admin modal
+  const [showReplyModal, setShowReplyModal] = useState(false);
+  const [showCreateAdminModal, setShowCreateAdminModal] = useState(false);
 
   // Selection & Input States
   const [selectedMatch, setSelectedMatch] = useState(null);
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [selectedMessage, setSelectedMessage] = useState(null); 
-  const [newAdmin, setNewAdmin] = useState({ name: '', email: '', password: '' }); // NEW
-  
+  const [newAdmin, setNewAdmin] = useState({ name: '', email: '', password: '' });
   const [roomDetails, setRoomDetails] = useState({ roomId: '', password: '' });
   const [slotListInput, setSlotListInput] = useState(""); 
   
-  // Result File States (For Image Upload)
+  // Result File States
   const [ptFile, setPtFile] = useState(null);
   const [gfxFile, setGfxFile] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
 
   const [newTicker, setNewTicker] = useState("");
-  // --- NEW STATES FOR BLOG & LEADERBOARD ---
+  
+  // Blog & Leaderboard States
   const [blogs, setBlogs] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [blogForm, setBlogForm] = useState({ title: '', category: 'News', content: '' });
@@ -104,10 +102,17 @@ const Admin = () => {
   const [customMsg, setCustomMsg] = useState("");
   const [replyText, setReplyText] = useState(""); 
   
-  // NEW STATES FOR BOOKING TABS
-  const [bookingTab, setBookingTab] = useState('pending'); // 'pending' or 'approved'
+  // Booking Tabs
+  const [bookingTab, setBookingTab] = useState('pending');
   const [messageText, setMessageText] = useState('');
   const [selectedBookingId, setSelectedBookingId] = useState(null);
+  
+  // ✅ NEW STATES FOR EDIT, REFUND & PAYOUTS
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editMatchId, setEditMatchId] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [matchToDelete, setMatchToDelete] = useState(null);
+  const [payoutProof, setPayoutProof] = useState(null);
 
   // Counters
   const pendingCount = bookings.filter(b => b.status === 'pending').length;
@@ -120,25 +125,13 @@ const Admin = () => {
     prizePool: '', rank1: '', rank2: '', rank3: '', perKill: '', status: 'Open',
     rules: '1. No Emulator allowed\n2. Screenshot mandatory\n3. ID/Pass 10 mins before start.' 
   });
-  // ... baaki states ke baad ...
 
-// --- NEW: FOOTER STATS STATE ---
-const [footerStats, setFooterStats] = useState({ 
+  // Footer Stats
+  const [footerStats, setFooterStats] = useState({ 
     users: '10K+', 
     visits: '50K+', 
     prize: '₹1L+' 
-});
-
-// --- NEW: UPDATE FUNCTION ---
-const handleUpdateStats = async () => {
-    try {
-        await setDoc(doc(db, "settings", "footer_stats"), footerStats);
-        toast.success("Footer Stats Updated Live! 🚀");
-    } catch (error) {
-        console.error(error);
-        toast.error("Failed to update stats");
-    }
-};
+  });
 
   const brTypes = ["Solo", "Duo", "Squad"];
   const csTypes = ["1v1", "2v2", "3v3", "4v4", "6v6"];
@@ -158,18 +151,13 @@ const handleUpdateStats = async () => {
     });
 
     const data = await res.json();
-    return data.secure_url; // Cloudinary se image URL milega
+    return data.secure_url;
   };
 
   // ==========================
-  // 4. DATABASE LISTENERS (UPDATED)
-  // ==========================
-// ==========================
-  // 4. DATABASE LISTENERS (FULLY UPDATED)
+  // 4. DATABASE LISTENERS
   // ==========================
   useEffect(() => {
-    // Security Check is already handled above
-    
     // A. Load Matches
     const unsubTourney = onSnapshot(query(collection(db, "tournaments"), orderBy("createdAt", "desc")), (snap) => {
       setTournaments(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -185,12 +173,12 @@ const handleUpdateStats = async () => {
         setMessages(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    // --- D. NEW: Load Blogs (Step 3 yahan hai) ---
+    // D. Load Blogs
     const unsubBlogs = onSnapshot(query(collection(db, "blogs"), orderBy("timestamp", "desc")), (snap) => {
         setBlogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    // --- E. NEW: Load Leaderboard (Step 3 yahan hai) ---
+    // E. Load Leaderboard
     const unsubLb = onSnapshot(query(collection(db, "leaderboard"), orderBy("points", "desc")), (snap) => {
         setLeaderboard(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
@@ -232,20 +220,19 @@ const handleUpdateStats = async () => {
       loadLogs().then(unsub => { unsubLogs = unsub; });
     }
 
-    // --- CLEANUP FUNCTION (Step 4 yahan hai) ---
     return () => { 
       unsubTourney(); 
       unsubBookings(); 
       unsubMessages();
-      unsubBlogs(); // ✅ Ab ye error nahi dega kyunki upar define kiya hai
-      unsubLb();    // ✅ Ye bhi sahi chalega
+      unsubBlogs();
+      unsubLb();
       if (unsubAdmins) unsubAdmins();
       if (unsubLogs) unsubLogs();
     };
   }, [navigate]);
 
   // ==========================
-  // 5. CORE FUNCTIONS (UPDATED WITH LOGGING)
+  // 5. CORE FUNCTIONS
   // ==========================
 
   // Helper function to log activities
@@ -268,33 +255,29 @@ const handleUpdateStats = async () => {
         roomId: "", password: "", createdAt: new Date() 
     });
     
-    // Log the action
     await logAction(`Created match: ${form.title}`);
     
     setForm(prev => ({ 
         ...prev, title: '', time: '', fee: '', filledSlots: 0, 
         prizePool: '', rank1: '', rank2: '', rank3: '', perKill: '' 
     }));
-   toast.success("Match Created Successfully! 🔥");
+    
+    toast.success("Match Created Successfully! 🔥");
     setActiveSection('manage'); 
   };
 
-  // --- B. BOOKING APPROVAL (EXISTING) ---
-  // --- B. BOOKING APPROVAL (UPDATED WITH AUTO-SLOT) ---
+  // --- B. BOOKING APPROVAL ---
   const handleBookingAction = async (booking, action) => {
       if (action === 'approve') {
           await updateDoc(doc(db, "bookings", booking.id), { status: 'approved' });
           
-          // 🔥 AUTO ADD TO SLOT LIST
-          // Format: "PlayerName (UID: GameID)"
           const teamEntry = `${booking.teamName || booking.playerName} (UID: ${booking.gameId || 'N/A'})`;
           
           await updateDoc(doc(db, "tournaments", booking.tournamentId), { 
-              filledSlots: increment(1),      // 1. Slot count badhayega
-              slotList: arrayUnion(teamEntry) // 2. List me naam jodega
+              filledSlots: increment(1),
+              slotList: arrayUnion(teamEntry)
           });
 
-          // Notification Logic (Same as before)
           const matchRef = doc(db, "tournaments", booking.tournamentId);
           const matchSnap = await getDoc(matchRef);
           let rules = "Follow fair play.";
@@ -312,7 +295,6 @@ const handleUpdateStats = async () => {
           toast.success("User Approved & Added to Slot List! ✅");
 
       } else {
-          // REJECT LOGIC (Same as old code)
           await updateDoc(doc(db, "bookings", booking.id), { status: 'rejected' });
           await addDoc(collection(db, "notifications"), {
               userId: booking.userId,
@@ -327,7 +309,7 @@ const handleUpdateStats = async () => {
       }
   };
 
-  // --- NEW: Simple Status Update ---
+  // --- Simple Status Update ---
   const handleUpdateStatus = async (id, newStatus) => {
       try {
           await updateDoc(doc(db, "bookings", id), { status: newStatus });
@@ -339,23 +321,20 @@ const handleUpdateStats = async () => {
       }
   };
   
-
-  // --- NEW: Send Message to User ---
-const handleSendMessage = async (bookingId) => {
+  // --- Send Message to User ---
+  const handleSendMessage = async (bookingId) => {
     if(!messageText) return;
     
     try {
         const booking = bookings.find(b => b.id === bookingId);
         
         if (booking) {
-            // 1. Booking me message save karo (existing functionality)
             await updateDoc(doc(db, "bookings", bookingId), {
                 adminMessage: messageText,
                 messageTime: new Date(),
                 lastUpdated: new Date()
             });
             
-            // 2. Purana notification bhi send karein
             await addDoc(collection(db, "notifications"), {
                 userId: booking.userId,
                 title: "📨 Admin Message",
@@ -364,7 +343,6 @@ const handleSendMessage = async (bookingId) => {
                 timestamp: new Date()
             });
             
-            // 3. Naya user_inbox me bhi save karein (User ke Inbox tab mein dikhega)
             await addDoc(collection(db, "user_inbox"), {
                 userId: booking.userId,
                 title: "Tournament Update 🏆",
@@ -386,7 +364,8 @@ const handleSendMessage = async (bookingId) => {
         console.error("Error sending message:", error);
         toast.error("Failed to send message");
     }
-};
+  };
+
   // --- C. ID/PASS RELEASE ---
   const saveIdPass = async () => {
       if (!selectedMatch) return;
@@ -397,7 +376,6 @@ const handleSendMessage = async (bookingId) => {
           status: 'ID Released'
       });
 
-      // Log the action
       await logAction(`Released ID/Pass for match: ${selectedMatch.title}`);
 
       const q = query(collection(db, "bookings"), where("tournamentId", "==", selectedMatch.id), where("status", "==", "approved"));
@@ -430,7 +408,6 @@ const handleSendMessage = async (bookingId) => {
           filledSlots: teams.length 
       });
 
-      // Log the action
       await logAction(`Updated slot list for match: ${selectedMatch.title}`);
 
       const q = query(collection(db, "bookings"), where("tournamentId", "==", selectedMatch.id), where("status", "==", "approved"));
@@ -453,7 +430,7 @@ const handleSendMessage = async (bookingId) => {
       toast.success(`Slot List Updated & Players Notified!`);
   };
 
-  // --- E. RESULT UPLOAD (WITH CLOUDINARY) ---
+  // --- E. RESULT UPLOAD ---
   const handleUploadResults = async () => {
       if(!selectedMatch) return;
       setIsUploading(true);
@@ -461,15 +438,14 @@ const handleSendMessage = async (bookingId) => {
           let ptUrl = "";
           let gfxUrl = "";
 
-          if(ptFile) ptUrl = await uploadToCloudinary(ptFile); // Cloudinary call
-          if(gfxFile) gfxUrl = await uploadToCloudinary(gfxFile); // Cloudinary call
+          if(ptFile) ptUrl = await uploadToCloudinary(ptFile);
+          if(gfxFile) gfxUrl = await uploadToCloudinary(gfxFile);
 
           await updateDoc(doc(db, "tournaments", selectedMatch.id), {
               results: { pt: ptUrl, gfx: gfxUrl },
               status: 'Completed'
           });
           
-          // Log the action
           await logAction(`Uploaded results for match: ${selectedMatch.title}`);
           
           setShowResultModal(false);
@@ -483,12 +459,11 @@ const handleSendMessage = async (bookingId) => {
       setIsUploading(false);
   };
 
-// --- F. MESSAGE REPLY ---
-const handleReplyToMessage = async () => {
+  // --- F. MESSAGE REPLY ---
+  const handleReplyToMessage = async () => {
     if (!selectedMessage || !replyText) return;
 
     try {
-        // 1. Purana notification bhi send karein (backward compatibility)
         if (selectedMessage.userId) {
             await addDoc(collection(db, "notifications"), {
                 userId: selectedMessage.userId,
@@ -498,7 +473,6 @@ const handleReplyToMessage = async () => {
                 timestamp: new Date()
             });
             
-            // 2. Naya user_inbox me bhi save karein
             await addDoc(collection(db, "user_inbox"), {
                 userId: selectedMessage.userId,
                 title: "Admin Reply 💬",
@@ -509,7 +483,6 @@ const handleReplyToMessage = async () => {
             });
         }
 
-        // Contact message status update karo
         await updateDoc(doc(db, "contact_messages", selectedMessage.id), { 
             status: 'replied',
             adminReply: replyText,
@@ -525,23 +498,133 @@ const handleReplyToMessage = async () => {
         console.error(error);
         toast.error("Failed to send reply");
     }
-};
+  };
 
-const handleDeleteMessage = async (id) => {
+  const handleDeleteMessage = async (id) => {
     if(confirm("Delete this message?")) {
       await deleteDoc(doc(db, "contact_messages", id));
-      // Log the action
       await logAction(`Deleted a contact message`);
     }
-};
+  };
 
+  // --- NEW: EDIT MATCH LOGIC ---
+  const handleEditClick = (match) => {
+    setForm(match);
+    setIsEditMode(true);
+    setEditMatchId(match.id);
+    setActiveSection('create');
+    toast('Edit Mode ON: Update details and click Update', { icon: '✏️' });
+  };
 
-  // --- G. ADMIN MANAGEMENT FUNCTIONS (NEW) ---
+  const handleUpdateMatch = async (e) => {
+    e.preventDefault();
+    if (!editMatchId) return;
+
+    try {
+      await updateDoc(doc(db, "tournaments", editMatchId), form);
+      await logAction(`Updated match details: ${form.title}`);
+      
+      setIsEditMode(false);
+      setEditMatchId(null);
+      setForm({
+        title: '', category: 'BR', map: 'Bermuda', matchCount: 1, time: '', fee: '', type: 'Squad',
+        headshotOnly: false, totalSlots: 48, filledSlots: 0,
+        prizePool: '', rank1: '', rank2: '', rank3: '', perKill: '', status: 'Open',
+        rules: '1. No Emulator allowed\n2. Screenshot mandatory\n3. ID/Pass 10 mins before start.' 
+      });
+      toast.success("Match Updated Successfully! ✅");
+      setActiveSection('manage');
+    } catch (error) {
+      console.error(error);
+      toast.error("Update failed");
+    }
+  };
+
+  // --- NEW: REFUND & DELETE LOGIC ---
+  const processRefundAndDelete = async () => {
+    if (!matchToDelete) return;
+    const toastId = toast.loading("Processing Refunds & Deleting...");
+
+    try {
+      const q = query(collection(db, "bookings"), where("tournamentId", "==", matchToDelete.id), where("status", "==", "approved"));
+      const snapshot = await getDocs(q);
+
+      await runTransaction(db, async (transaction) => {
+        for (const bookingDoc of snapshot.docs) {
+          const booking = bookingDoc.data();
+          const userRef = doc(db, "users", booking.userId);
+          
+          transaction.update(userRef, { 
+            walletBalance: increment(Number(matchToDelete.fee)) 
+          });
+
+          const transRef = doc(collection(db, "transactions"));
+          transaction.set(transRef, {
+            userId: booking.userId,
+            amount: Number(matchToDelete.fee),
+            type: 'refund',
+            remark: `Refund for Match ${matchToDelete.title}`,
+            timestamp: new Date()
+          });
+
+          transaction.delete(doc(db, "bookings", booking.id));
+        }
+
+        transaction.delete(doc(db, "tournaments", matchToDelete.id));
+      });
+
+      await logAction(`Deleted match ${matchToDelete.title} & Refunded ${snapshot.size} players`);
+      toast.success(`Match Deleted & ${snapshot.size} Players Refunded! 💸`, { id: toastId });
+      setShowDeleteModal(false);
+      setMatchToDelete(null);
+
+    } catch (error) {
+      console.error(error);
+      toast.error("Refund Failed! Check Console.", { id: toastId });
+    }
+  };
+
+  const processForceDelete = async () => {
+      if (!matchToDelete) return;
+      await deleteDoc(doc(db, "tournaments", matchToDelete.id));
+      await logAction(`Force deleted match: ${matchToDelete.title}`);
+      toast.success("Match Deleted (No Refund Given) 🗑️");
+      setShowDeleteModal(false);
+  };
+
+  // --- NEW: PAYOUT LOGIC ---
+  const handleMarkPaid = async (bookingId, userId, amount) => {
+      let proofUrl = "";
+      if (payoutProof) {
+          toast.loading("Uploading Proof...");
+          proofUrl = await uploadToCloudinary(payoutProof);
+          toast.dismiss();
+      }
+
+      await updateDoc(doc(db, "bookings", bookingId), {
+          status: 'paid',
+          paymentProof: proofUrl,
+          paidAt: new Date()
+      });
+
+      await addDoc(collection(db, "notifications"), {
+          userId: userId,
+          title: "💰 PRIZE PAID!",
+          message: `Congrats! Your winning amount ₹${amount} has been paid. Check 'My Matches' for proof.`,
+          read: false,
+          timestamp: new Date()
+      });
+
+      await logAction(`Paid ₹${amount} to User ${userId}`);
+      setPayoutProof(null);
+      toast.success("Marked as PAID! ✅");
+  };
+
+  // --- G. ADMIN MANAGEMENT FUNCTIONS ---
   const handleCreateAdmin = async (e) => {
     e.preventDefault();
     const user = auth.currentUser;
     
-    // Only super admin can create admins
     if (!user || user.email !== SUPER_ADMIN_EMAIL) {
       return toast.error("Only Owner can create new admins!");
     }
@@ -551,7 +634,6 @@ const handleDeleteMessage = async (id) => {
     }
     
     try {
-      // Check if admin already exists
       const q = query(collection(db, "admins"), where("email", "==", newAdmin.email));
       const snapshot = await getDocs(q);
       
@@ -559,7 +641,6 @@ const handleDeleteMessage = async (id) => {
         return toast.error("Admin with this email already exists!");
       }
       
-      // Create new admin
       await addDoc(collection(db, "admins"), {
         name: newAdmin.name,
         email: newAdmin.email,
@@ -568,10 +649,8 @@ const handleDeleteMessage = async (id) => {
         createdAt: new Date()
       });
       
-      // Log the action
       await logAction(`Created new admin: ${newAdmin.name} (${newAdmin.email})`);
       
-      // Clear form
       setNewAdmin({ name: '', email: '', password: '' });
       setShowCreateAdminModal(false);
       toast.success("New Admin Created Successfully! ✅");
@@ -585,7 +664,6 @@ const handleDeleteMessage = async (id) => {
   const handleDeleteAdmin = async (id, email) => {
     const user = auth.currentUser;
     
-    // Only super admin can delete admins
     if (!user || user.email !== SUPER_ADMIN_EMAIL) {
       return toast.error("Only Owner can delete admins!");
     }
@@ -594,10 +672,7 @@ const handleDeleteMessage = async (id) => {
     
     try {
       await deleteDoc(doc(db, "admins", id));
-      
-      // Log the action
       await logAction(`Deleted admin: ${email}`);
-      
       toast.success("Admin deleted successfully!");
     } catch (err) {
       console.error("Error deleting admin:", err);
@@ -614,7 +689,6 @@ const handleDeleteMessage = async (id) => {
       const snap = await getDoc(doc(db, "settings", "ticker"));
       if(snap.exists()) setTickers(snap.data().messages);
       
-      // Log the action
       await logAction(`Added ticker: ${newTicker.substring(0, 50)}...`);
   };
   
@@ -623,14 +697,25 @@ const handleDeleteMessage = async (id) => {
       const snap = await getDoc(doc(db, "settings", "ticker"));
       if(snap.exists()) setTickers(snap.data().messages);
       
-      // Log the action
       await logAction(`Removed ticker: ${msg.substring(0, 50)}...`);
+  };
+
+  // --- Footer Stats Update ---
+  const handleUpdateStats = async () => {
+    try {
+        await setDoc(doc(db, "settings", "footer_stats"), footerStats);
+        toast.success("Footer Stats Updated Live! 🚀");
+    } catch (error) {
+        console.error(error);
+        toast.error("Failed to update stats");
+    }
   };
 
   const handleCategoryChange = (e) => {
     const newCat = e.target.value;
     setForm({ ...form, category: newCat, type: newCat === 'CS' ? '4v4' : 'Squad', totalSlots: newCat === 'CS' ? 2 : 48 });
   };
+  
   const handleCreateBlog = async (e) => {
       e.preventDefault();
       if (!blogForm.title || !blogForm.content) return toast.error("Fill all details!");
@@ -688,10 +773,9 @@ const handleDeleteMessage = async (id) => {
   return (
     <div className="min-h-screen bg-black relative font-sans text-sm text-gray-200 pb-20">
       
-      {/* NAVBAR - UPDATED WITH HOME BUTTON AND USER INFO */}
+      {/* NAVBAR */}
       <div className="fixed top-0 left-0 w-full bg-[#0a0a0a]/95 backdrop-blur-md border-b border-white/10 z-50 px-4 py-3 flex items-center justify-between shadow-2xl">
           <div className="flex items-center gap-3">
-              {/* HOME BUTTON */}
               <button 
                 onClick={() => navigate('/')} 
                 className="bg-white/10 p-2 rounded-lg hover:bg-white/20 text-white transition border border-white/10" 
@@ -715,13 +799,11 @@ const handleDeleteMessage = async (id) => {
                   { id: 'create', icon: Plus, label: 'Create' },
                   { id: 'manage', icon: Layers, label: 'Manage' },
                   { id: 'bookings', icon: Bell, label: 'Requests', badge: pendingCount },
+                  { id: 'payouts', icon: CreditCard, label: 'Payouts', badge: bookings.filter(b => b.status === 'processing' || b.status === 'won').length },
                   { id: 'messages', icon: MessageSquare, label: 'Support', badge: unreadMsgCount },
                   { id: 'settings', icon: Settings, label: 'Settings' },
-                  // 🔽 YE DO LINES ADD KARO 🔽
                   { id: 'leaderboard', icon: BarChart2, label: 'Leaderboard' },
                   { id: 'blog', icon: Megaphone, label: 'Blog CMS' },
-                  // 🔼 YAHAN TAK 🔼
-                  // Only show TEAM tab for super admin
                   ...(userRole === 'super_admin' ? [{ id: 'team', icon: Shield, label: 'Team' }] : []),
               ].map((item) => (
                   <button 
@@ -765,9 +847,12 @@ const handleDeleteMessage = async (id) => {
         {activeSection === 'create' && (
             <div className="max-w-3xl mx-auto bg-[#111] border border-white/10 p-8 rounded-2xl shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-brand-green to-transparent"></div>
-                <h2 className="text-2xl font-gaming text-white mb-8 flex items-center gap-2 border-b border-white/10 pb-4"><Plus className="text-brand-green"/> LAUNCH NEW TOURNAMENT</h2>
+                <h2 className="text-2xl font-gaming text-white mb-8 flex items-center gap-2 border-b border-white/10 pb-4">
+                   {isEditMode ? <Edit className="text-yellow-500"/> : <Plus className="text-brand-green"/>} 
+                   {isEditMode ? "EDIT TOURNAMENT" : "LAUNCH NEW TOURNAMENT"}
+                </h2>
                 
-                <form onSubmit={handleSubmit} className="space-y-5">
+                <form onSubmit={isEditMode ? handleUpdateMatch : handleSubmit} className="space-y-5">
                     
                     {/* 1. Game Mode & Format */}
                     <div className="grid grid-cols-2 gap-5">
@@ -843,7 +928,7 @@ const handleDeleteMessage = async (id) => {
                         </div>
                     </div>
 
-                    {/* 3. CS Special Toggle (Headshot Only) */}
+                    {/* 3. CS Special Toggle */}
                     {form.category === 'CS' && (
                         <div 
                             className={`p-3 rounded-lg border cursor-pointer flex items-center justify-between transition px-4 ${form.headshotOnly ? 'bg-red-900/20 border-red-500' : 'bg-black border-white/20'}`} 
@@ -902,9 +987,21 @@ const handleDeleteMessage = async (id) => {
                         <textarea className="w-full h-24 bg-black border border-white/20 rounded-lg p-3 text-white text-sm font-mono focus:border-brand-green outline-none" value={form.rules} onChange={e => setForm({...form, rules: e.target.value})}></textarea>
                     </div>
 
-                    <button className="w-full bg-brand-green text-black font-bold py-4 rounded-xl hover:bg-white transition text-lg shadow-lg shadow-brand-green/20 flex items-center justify-center gap-2">
-                        LAUNCH TOURNAMENT 🚀
+                    <button className={`w-full font-bold py-4 rounded-xl hover:bg-white transition text-lg shadow-lg flex items-center justify-center gap-2 ${isEditMode ? 'bg-yellow-500 text-black shadow-yellow-500/20' : 'bg-brand-green text-black shadow-brand-green/20'}`}>
+                      {isEditMode ? "UPDATE MATCH DETAILS 🔄" : "LAUNCH TOURNAMENT 🚀"}
                     </button>
+                    {isEditMode && (
+                        <button type="button" onClick={()=>{
+                            setIsEditMode(false); 
+                            setForm({
+                                title: '', category: 'BR', map: 'Bermuda', matchCount: 1, time: '', fee: '', type: 'Squad',
+                                headshotOnly: false, totalSlots: 48, filledSlots: 0,
+                                prizePool: '', rank1: '', rank2: '', rank3: '', perKill: '', status: 'Open',
+                                rules: '1. No Emulator allowed\n2. Screenshot mandatory\n3. ID/Pass 10 mins before start.' 
+                            }); 
+                            setActiveSection('manage');
+                        }} className="w-full text-gray-500 mt-2 text-sm">Cancel Edit</button>
+                    )}
                 </form>
             </div>
         )}
@@ -927,29 +1024,24 @@ const handleDeleteMessage = async (id) => {
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 w-full xl:w-auto">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 w-full xl:w-auto">
                             <button onClick={() => { setSelectedMatch(match); setSlotListInput(match.slotList ? match.slotList.join('\n') : ''); setShowSlotModal(true); }} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-blue-500/20 hover:text-blue-400 border border-white/5 transition"><List size={20} className="mb-1"/><span className="text-[10px] font-bold">SLOT LIST</span></button>
                             <button onClick={() => { setSelectedMatch(match); setRoomDetails({roomId: match.roomId, password: match.password}); setShowIdModal(true); }} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-brand-green/20 hover:text-brand-green border border-white/5 transition"><Key size={20} className="mb-1"/><span className="text-[10px] font-bold">ID/PASS</span></button>
                             <button onClick={() => { setSelectedMatch(match); setShowResultModal(true); }} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-yellow-500/20 hover:text-yellow-400 border border-white/5 transition"><ImageIcon size={20} className="mb-1"/><span className="text-[10px] font-bold">RESULTS</span></button>
-                            <button onClick={async () => { 
-                                if(confirm("Delete this match?")) {
-                                    await deleteDoc(doc(db, "tournaments", match.id));
-                                    await logAction(`Deleted match: ${match.title}`);
-                                }
-                            }} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-red-500/20 hover:text-red-500 border border-white/5 transition"><Trash2 size={20} className="mb-1"/><span className="text-[10px] font-bold">DELETE</span></button>
+                            <button onClick={() => handleEditClick(match)} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-blue-500/20 hover:text-blue-400 border border-white/5 transition"><Edit size={20} className="mb-1"/><span className="text-[10px] font-bold">EDIT</span></button>
+                            <button onClick={() => { setMatchToDelete(match); setShowDeleteModal(true); }} className="flex flex-col items-center justify-center p-3 bg-[#1a1a1a] rounded hover:bg-red-500/20 hover:text-red-500 border border-white/5 transition"><Trash2 size={20} className="mb-1"/><span className="text-[10px] font-bold">DELETE</span></button>
                         </div>
                     </div>
                 ))}
             </div>
         )}
 
-        {/* --- UPDATED BOOKING REQUESTS VIEW WITH TABS --- */}
+        {/* --- BOOKING REQUESTS VIEW --- */}
         {activeSection === 'bookings' && (
             <div className="max-w-6xl mx-auto bg-[#111] border border-white/10 rounded-2xl overflow-hidden min-h-[60vh]">
                 <div className="p-5 bg-white/5 border-b border-white/10 flex justify-between items-center">
                     <h3 className="font-bold text-white text-lg flex items-center gap-2"><Bell className="text-brand-green"/> BOOKING MANAGEMENT</h3>
                     
-                    {/* TABS: Pending vs Approved */}
                     <div className="flex gap-2">
                         <button 
                             onClick={() => setBookingTab('pending')} 
@@ -995,7 +1087,6 @@ const handleDeleteMessage = async (id) => {
                                                 <p className="text-xs text-gray-500 font-mono">{booking.whatsapp}</p>
                                                 <p className="text-xs text-gray-600 mt-1">User ID: {booking.userId?.substring(0, 8)}...</p>
                                                 
-                                                {/* Display Admin Message if exists */}
                                                 {booking.adminMessage && bookingTab === 'approved' && (
                                                     <div className="mt-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded">
                                                         <p className="text-blue-400 text-xs font-bold">Sent Message:</p>
@@ -1045,13 +1136,11 @@ const handleDeleteMessage = async (id) => {
                                                     </div>
                                                 ) : (
                                                     <div className="flex flex-col gap-2 min-w-[200px]">
-                                                        {/* Message User Button */}
                                                         <button onClick={() => setSelectedBookingId(selectedBookingId === booking.id ? null : booking.id)} 
                                                                 className="bg-blue-600 hover:bg-blue-500 text-white py-2 rounded text-xs font-bold flex items-center justify-center gap-2">
                                                             <MessageSquare size={14}/> MESSAGE USER
                                                         </button>
                                                         
-                                                        {/* Message Input Box (Toggle) */}
                                                         {selectedBookingId === booking.id && (
                                                             <div className="mt-2 flex gap-2">
                                                                 <input 
@@ -1068,7 +1157,6 @@ const handleDeleteMessage = async (id) => {
                                                             </div>
                                                         )}
                                                         
-                                                        {/* Additional Actions for Approved Bookings */}
                                                         <div className="flex gap-2 mt-1">
                                                             <button onClick={() => handleUpdateStatus(booking.id, 'completed')} 
                                                                     className="flex-1 bg-purple-600/10 text-purple-400 border border-purple-500/20 px-2 py-1 rounded text-xs hover:bg-purple-600 hover:text-white">
@@ -1120,13 +1208,58 @@ const handleDeleteMessage = async (id) => {
             </div>
         )}
 
-        {/* --- TEAM MANAGEMENT VIEW (ONLY FOR SUPER ADMIN) --- */}
+        {/* --- NEW: PAYOUTS VIEW --- */}
+        {activeSection === 'payouts' && (
+            <div className="max-w-6xl mx-auto bg-[#111] border border-white/10 rounded-2xl overflow-hidden min-h-[60vh]">
+                <div className="p-5 bg-white/5 border-b border-white/10">
+                    <h3 className="font-bold text-white text-lg flex items-center gap-2"><CreditCard className="text-yellow-500"/> WINNING PAYOUTS</h3>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                        <thead className="text-xs text-gray-500 border-b border-white/10 bg-black/40">
+                            <tr><th className="p-5">WINNER</th><th className="p-5">AMOUNT</th><th className="p-5">USER QR</th><th className="p-5 text-right">ACTION</th></tr>
+                        </thead>
+                        <tbody>
+                            {bookings.filter(b => b.status === 'won' || b.status === 'processing' || b.status === 'paid').length === 0 && (
+                                <tr><td colSpan="4" className="p-10 text-center text-gray-500">No winnings to process yet.</td></tr>
+                            )}
+                            {bookings.filter(b => b.status === 'won' || b.status === 'processing' || b.status === 'paid').map((b) => (
+                                <tr key={b.id} className="border-b border-white/5 hover:bg-white/5">
+                                    <td className="p-5">
+                                        <p className="font-bold text-white">{b.playerName}</p>
+                                        <p className="text-xs text-gray-500">Match ID: {b.tournamentId}</p>
+                                    </td>
+                                    <td className="p-5 text-green-400 font-bold font-mono">₹{b.prizeAmount || 0}</td>
+                                    <td className="p-5">
+                                        {b.userQr ? (
+                                            <a href={b.userQr} target="_blank" className="text-blue-400 text-xs flex items-center gap-1 underline"><Eye size={12}/> View QR</a>
+                                        ) : <span className="text-gray-600 text-xs">No QR</span>}
+                                    </td>
+                                    <td className="p-5 text-right">
+                                        {b.status === 'paid' ? (
+                                            <span className="text-green-500 text-xs border border-green-500/20 px-2 py-1 rounded">PAID ✅</span>
+                                        ) : (
+                                            <div className="flex flex-col items-end gap-2">
+                                                <div className="relative">
+                                                    <input type="file" onChange={e => setPayoutProof(e.target.files[0])} className="w-20 text-[10px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:bg-gray-800 file:text-white"/>
+                                                </div>
+                                                <button onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount)} className="bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold hover:bg-white">MARK PAID</button>
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        )}
+
+        {/* --- TEAM MANAGEMENT VIEW --- */}
         {activeSection === 'team' && userRole === 'super_admin' && (
             <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
                 
-                {/* LEFT: CREATE & LIST */}
                 <div className="space-y-6">
-                    {/* Create Form */}
                     <div className="bg-[#111] p-6 rounded-xl border border-white/10">
                         <h3 className="text-brand-green font-bold mb-4 flex items-center gap-2"><UserPlus size={18}/> ADD NEW ADMIN</h3>
                         <form onSubmit={handleCreateAdmin} className="space-y-3">
@@ -1137,7 +1270,6 @@ const handleDeleteMessage = async (id) => {
                         </form>
                     </div>
 
-                    {/* Admin List */}
                     <div className="bg-[#111] p-6 rounded-xl border border-white/10">
                         <h3 className="text-white font-bold mb-4">ACTIVE ADMINS</h3>
                         <div className="space-y-2">
@@ -1155,7 +1287,6 @@ const handleDeleteMessage = async (id) => {
                     </div>
                 </div>
 
-                {/* RIGHT: ACTIVITY LOGS */}
                 <div className="bg-[#111] p-6 rounded-xl border border-white/10 h-[500px] overflow-y-auto">
                     <h3 className="text-brand-green font-bold mb-4 flex items-center gap-2"><Activity size={18}/> ACTIVITY LOGS</h3>
                     <div className="space-y-3">
@@ -1168,82 +1299,80 @@ const handleDeleteMessage = async (id) => {
                         {logs.length === 0 && <p className="text-gray-600">No activity recorded yet.</p>}
                     </div>
                 </div>
-
             </div>
         )}
 
-       {activeSection === 'settings' && (
-    <div className="max-w-4xl mx-auto space-y-8">
-        
-        {/* 1. LIVE TICKER MANAGER (EXISTING) */}
-        <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
-            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
-                <Megaphone size={24} className="text-brand-green"/> LIVE TICKER MANAGER
-            </h3>
-            <div className="flex gap-3 mb-6">
-                <input 
-                    type="text" 
-                    className="flex-1 bg-black border border-white/20 rounded-lg p-3 text-white outline-none focus:border-brand-green" 
-                    placeholder="Type new announcement..." 
-                    value={newTicker} 
-                    onChange={e => setNewTicker(e.target.value)}
-                />
-                <button onClick={addTicker} className="bg-brand-green text-black px-6 font-bold rounded-lg hover:bg-white transition">ADD</button>
-            </div>
-            <div className="space-y-2">
-                {tickers.map((msg, idx) => (
-                    <div key={idx} className="bg-white/5 p-4 rounded-lg flex justify-between items-center border border-white/5 group hover:border-brand-green/30">
-                        <span className="text-gray-300 text-sm">{msg}</span>
-                        <button onClick={() => removeTicker(msg)} className="text-red-500 hover:bg-red-500/10 p-2 rounded"><Trash2 size={16}/></button>
-                    </div>
-                ))}
-            </div>
-        </div>
+        {/* --- SETTINGS VIEW --- */}
+        {activeSection === 'settings' && (
+          <div className="max-w-4xl mx-auto space-y-8">
+              
+              <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
+                  <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
+                      <Megaphone size={24} className="text-brand-green"/> LIVE TICKER MANAGER
+                  </h3>
+                  <div className="flex gap-3 mb-6">
+                      <input 
+                          type="text" 
+                          className="flex-1 bg-black border border-white/20 rounded-lg p-3 text-white outline-none focus:border-brand-green" 
+                          placeholder="Type new announcement..." 
+                          value={newTicker} 
+                          onChange={e => setNewTicker(e.target.value)}
+                      />
+                      <button onClick={addTicker} className="bg-brand-green text-black px-6 font-bold rounded-lg hover:bg-white transition">ADD</button>
+                  </div>
+                  <div className="space-y-2">
+                      {tickers.map((msg, idx) => (
+                          <div key={idx} className="bg-white/5 p-4 rounded-lg flex justify-between items-center border border-white/5 group hover:border-brand-green/30">
+                              <span className="text-gray-300 text-sm">{msg}</span>
+                              <button onClick={() => removeTicker(msg)} className="text-red-500 hover:bg-red-500/10 p-2 rounded"><Trash2 size={16}/></button>
+                          </div>
+                      ))}
+                  </div>
+              </div>
 
-        {/* 2. FOOTER STATISTICS CONTROL (NEW ADDITION) */}
-        <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
-            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
-                <BarChart2 size={24} className="text-blue-500"/> FOOTER STATS CONTROL
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
-                <div>
-                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Trusted Users</label>
-                    <input 
-                        value={footerStats.users} 
-                        onChange={e => setFooterStats({...footerStats, users: e.target.value})} 
-                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
-                        placeholder="e.g. 15K+"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Total Visits</label>
-                    <input 
-                        value={footerStats.visits} 
-                        onChange={e => setFooterStats({...footerStats, visits: e.target.value})} 
-                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
-                        placeholder="e.g. 1M+"
-                    />
-                </div>
-                <div>
-                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Prize Distributed</label>
-                    <input 
-                        value={footerStats.prize} 
-                        onChange={e => setFooterStats({...footerStats, prize: e.target.value})} 
-                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
-                        placeholder="e.g. ₹5L+"
-                    />
-                </div>
-            </div>
-            <button 
-                onClick={handleUpdateStats} 
-                className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-500 transition shadow-lg shadow-blue-900/20"
-            >
-                UPDATE LIVE SITE STATS ⚡
-            </button>
-        </div>
+              <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
+                  <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
+                      <BarChart2 size={24} className="text-blue-500"/> FOOTER STATS CONTROL
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+                      <div>
+                          <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Trusted Users</label>
+                          <input 
+                              value={footerStats.users} 
+                              onChange={e => setFooterStats({...footerStats, users: e.target.value})} 
+                              className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                              placeholder="e.g. 15K+"
+                          />
+                      </div>
+                      <div>
+                          <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Total Visits</label>
+                          <input 
+                              value={footerStats.visits} 
+                              onChange={e => setFooterStats({...footerStats, visits: e.target.value})} 
+                              className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                              placeholder="e.g. 1M+"
+                          />
+                      </div>
+                      <div>
+                          <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Prize Distributed</label>
+                          <input 
+                              value={footerStats.prize} 
+                              onChange={e => setFooterStats({...footerStats, prize: e.target.value})} 
+                              className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                              placeholder="e.g. ₹5L+"
+                          />
+                      </div>
+                  </div>
+                  <button 
+                      onClick={handleUpdateStats} 
+                      className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-500 transition shadow-lg shadow-blue-900/20"
+                  >
+                      UPDATE LIVE SITE STATS ⚡
+                  </button>
+              </div>
+          </div>
+        )}
 
-    </div>
-)}
         {/* --- BLOG CMS VIEW --- */}
         {activeSection === 'blog' && (
           <div className="grid md:grid-cols-2 gap-8">
@@ -1315,6 +1444,7 @@ const handleDeleteMessage = async (id) => {
              </div>
           </div>
         )}
+
         {/* ================= MODALS ================= */}
         
         {/* 1. SLOT LIST MODAL */}
@@ -1328,7 +1458,7 @@ const handleDeleteMessage = async (id) => {
             </div>
         )}
 
-        {/* 2. RESULT MODAL (CLOUDINARY UPLOAD) */}
+        {/* 2. RESULT MODAL */}
         {showResultModal && (
             <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50 backdrop-blur-md">
                 <div className="bg-[#111] border border-white/20 w-full max-w-md rounded-2xl p-6 shadow-2xl">
@@ -1404,6 +1534,29 @@ const handleDeleteMessage = async (id) => {
                     <div className="flex gap-2">
                         <button onClick={() => setShowReplyModal(false)} className="flex-1 bg-gray-800 text-white py-2 rounded font-bold text-xs hover:bg-gray-700">CANCEL</button>
                         <button onClick={handleReplyToMessage} className="flex-1 bg-purple-600 text-white py-2 rounded font-bold text-xs hover:bg-purple-500">SEND REPLY</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* 6. REFUND & DELETE MODAL */}
+        {showDeleteModal && matchToDelete && (
+            <div className="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 backdrop-blur-md">
+                <div className="bg-[#1a1a1a] border border-red-500/30 w-full max-w-md rounded-2xl p-6 shadow-2xl">
+                    <h3 className="font-bold text-white mb-2 text-xl flex items-center gap-2"><Trash2 className="text-red-500"/> DELETE MATCH?</h3>
+                    <p className="text-gray-400 text-sm mb-6">Match: <span className="text-white font-bold">{matchToDelete.title}</span><br/>Deleting this match is permanent.</p>
+                    
+                    <div className="flex flex-col gap-3">
+                        <button onClick={processRefundAndDelete} className="bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-500 flex items-center justify-center gap-2">
+                            💸 REFUND USERS & DELETE
+                            <span className="text-[10px] bg-black/20 px-2 py-0.5 rounded">Recommended</span>
+                        </button>
+                        
+                        <button onClick={processForceDelete} className="bg-red-600/20 text-red-500 border border-red-500/50 py-3 rounded-lg font-bold hover:bg-red-600 hover:text-white">
+                            🗑️ FORCE DELETE (NO REFUND)
+                        </button>
+
+                        <button onClick={() => setShowDeleteModal(false)} className="text-gray-500 text-sm mt-2 hover:text-white">Cancel</button>
                     </div>
                 </div>
             </div>
