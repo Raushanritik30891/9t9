@@ -113,6 +113,11 @@ const Admin = () => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [matchToDelete, setMatchToDelete] = useState(null);
   const [payoutProof, setPayoutProof] = useState(null);
+  // ... purane states ke neeche ...
+  
+  // ✅ NEW: WINNER SELECTION STATES
+  const [winners, setWinners] = useState({ rank1: '', rank2: '', rank3: '' }); // BR ke liye
+  const [csWinner, setCsWinner] = useState(''); // CS ke liye
 
   // Counters
   const pendingCount = bookings.filter(b => b.status === 'pending').length;
@@ -430,35 +435,87 @@ const Admin = () => {
       toast.success(`Slot List Updated & Players Notified!`);
   };
 
-  // --- E. RESULT UPLOAD ---
-  const handleUploadResults = async () => {
-      if(!selectedMatch) return;
-      setIsUploading(true);
-      try {
-          let ptUrl = "";
-          let gfxUrl = "";
+const handleDeclareResult = async () => {
+    if(!selectedMatch) return;
+    
+    // Validation: Check if winners selected for BR or CS
+    if (selectedMatch.category === 'BR' && (!winners.rank1)) {
+        return toast.error("Please select at least Rank #1 Team");
+    }
+    if (selectedMatch.category === 'CS' && !csWinner) {
+        return toast.error("Please select the Winner Team");
+    }
 
-          if(ptFile) ptUrl = await uploadToCloudinary(ptFile);
-          if(gfxFile) gfxUrl = await uploadToCloudinary(gfxFile);
+    setIsUploading(true);
+    
+    try {
+        // 1. Upload Images (Optional)
+        let ptUrl = "", gfxUrl = "";
+        if(ptFile) ptUrl = await uploadToCloudinary(ptFile);
+        if(gfxFile) gfxUrl = await uploadToCloudinary(gfxFile);
 
-          await updateDoc(doc(db, "tournaments", selectedMatch.id), {
-              results: { pt: ptUrl, gfx: gfxUrl },
-              status: 'Completed'
-          });
-          
-          await logAction(`Uploaded results for match: ${selectedMatch.title}`);
-          
-          setShowResultModal(false);
-          setPtFile(null);
-          setGfxFile(null);
-          toast.success("Results Uploaded & Match Closed! 🏆");
-      } catch(err) {
-          console.error(err);
-          toast.error("Upload failed. Check console.");
-      }
-      setIsUploading(false);
-  };
+        // 2. Identify Winning Team Names
+        let winningTeams = [];
+        if (selectedMatch.category === 'BR') {
+            winningTeams = [winners.rank1, winners.rank2, winners.rank3].filter(n => n && n !== "None");
+        } else {
+            winningTeams = [csWinner].filter(n => n && n !== "None");
+        }
 
+        // 3. Update Bookings (Find User by Team Name and mark WON)
+        const q = query(collection(db, "bookings"), where("tournamentId", "==", selectedMatch.id));
+        const snapshot = await getDocs(q);
+        const batch = writeBatch(db);
+        let winnerCount = 0;
+
+        snapshot.forEach((docSnap) => {
+            const booking = docSnap.data();
+            // Logic: Check if the booking's team name OR player name exists in the winningTeams array
+            // Hum Slot List se name utha rahe hain, to exact match hona chahiye
+            
+            // Extract pure name from "TeamName (UID: xxx)" format if needed, or match directly
+            // Assuming Dropdown values match booking names exactly.
+            
+            let isWinner = false;
+            const bookingName = booking.teamName || booking.playerName; // Booking ka naam
+            
+            // Check loop
+            winningTeams.forEach(winner => {
+                if(bookingName && winner.includes(bookingName)) { 
+                    isWinner = true; 
+                }
+            });
+            
+            if (isWinner) {
+                batch.update(doc(db, "bookings", docSnap.id), { 
+                    status: 'won', // ✅ Ye status change user dashboard pe QR upload trigger karega
+                    prizeAmount: 0 // Amount baad me set hoga ya auto-calc kar sakte ho
+                });
+                winnerCount++;
+            }
+        });
+
+        // 4. Close Match
+        batch.update(doc(db, "tournaments", selectedMatch.id), {
+            results: { pt: ptUrl, gfx: gfxUrl },
+            status: 'Completed'
+        });
+
+        await batch.commit();
+        await logAction(`Declared results for ${selectedMatch.title}. Winners: ${winnerCount}`);
+        
+        toast.success(`Result Published! ${winnerCount} Users marked as Winners.`);
+        setShowResultModal(false);
+        setPtFile(null); setGfxFile(null);
+        setWinners({ rank1: '', rank2: '', rank3: '' });
+        setCsWinner('');
+
+    } catch(err) {
+        console.error(err);
+        toast.error("Failed to declare result.");
+    }
+    setIsUploading(false);
+};
   // --- F. MESSAGE REPLY ---
   const handleReplyToMessage = async () => {
     if (!selectedMessage || !replyText) return;
@@ -540,85 +597,74 @@ const Admin = () => {
     }
   };
 
-  // --- NEW: REFUND & DELETE LOGIC ---
-  const processRefundAndDelete = async () => {
-    if (!matchToDelete) return;
-    const toastId = toast.loading("Processing Refunds & Deleting...");
+// --- UPDATED: CANCEL MATCH LOGIC (Wallet Hata Diya) ---
+const handleCancelMatch = async () => {
+  if (!matchToDelete) return;
+  const toastId = toast.loading("Cancelling Match & Enabling Refunds...");
 
-    try {
-      const q = query(collection(db, "bookings"), where("tournamentId", "==", matchToDelete.id), where("status", "==", "approved"));
-      const snapshot = await getDocs(q);
+  try {
+    // 1. Sare Bookings dhundo is match ki
+    const q = query(collection(db, "bookings"), where("tournamentId", "==", matchToDelete.id), where("status", "==", "approved"));
+    const snapshot = await getDocs(q);
 
-      await runTransaction(db, async (transaction) => {
-        for (const bookingDoc of snapshot.docs) {
-          const booking = bookingDoc.data();
-          const userRef = doc(db, "users", booking.userId);
-          
-          transaction.update(userRef, { 
-            walletBalance: increment(Number(matchToDelete.fee)) 
-          });
+    const batch = writeBatch(db);
 
-          const transRef = doc(collection(db, "transactions"));
-          transaction.set(transRef, {
-            userId: booking.userId,
-            amount: Number(matchToDelete.fee),
-            type: 'refund',
-            remark: `Refund for Match ${matchToDelete.title}`,
-            timestamp: new Date()
-          });
+    // 2. Har user ka status 'refund_pending' karo
+    snapshot.forEach((docSnap) => {
+        batch.update(doc(db, "bookings", docSnap.id), { 
+            status: 'refund_pending', // User ab QR upload karega
+            prizeAmount: matchToDelete.fee // Refund amount set kiya
+        });
+    });
 
-          transaction.delete(doc(db, "bookings", booking.id));
-        }
+    // 3. Match ka status 'Cancelled' karo (Delete mat karo taki record rahe)
+    batch.update(doc(db, "tournaments", matchToDelete.id), {
+        status: 'Cancelled'
+    });
 
-        transaction.delete(doc(db, "tournaments", matchToDelete.id));
-      });
+    await batch.commit();
 
-      await logAction(`Deleted match ${matchToDelete.title} & Refunded ${snapshot.size} players`);
-      toast.success(`Match Deleted & ${snapshot.size} Players Refunded! 💸`, { id: toastId });
-      setShowDeleteModal(false);
-      setMatchToDelete(null);
+    await logAction(`Cancelled match ${matchToDelete.title}. Refunds enabled for ${snapshot.size} players.`);
+    toast.success(`Match Cancelled! ${snapshot.size} players can now claim refund via QR.`, { id: toastId });
+    setShowDeleteModal(false);
+    setMatchToDelete(null);
 
-    } catch (error) {
-      console.error(error);
-      toast.error("Refund Failed! Check Console.", { id: toastId });
+  } catch (error) {
+    console.error("Cancel Error:", error);
+    toast.error("Failed to cancel match.", { id: toastId });
+  }
+};
+  // --- UPDATED PAYOUT LOGIC ---
+const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
+    let proofUrl = "";
+    if (payoutProof) {
+        toast.loading("Uploading Proof...");
+        proofUrl = await uploadToCloudinary(payoutProof);
+        toast.dismiss();
     }
-  };
 
-  const processForceDelete = async () => {
-      if (!matchToDelete) return;
-      await deleteDoc(doc(db, "tournaments", matchToDelete.id));
-      await logAction(`Force deleted match: ${matchToDelete.title}`);
-      toast.success("Match Deleted (No Refund Given) 🗑️");
-      setShowDeleteModal(false);
-  };
+    const newStatus = isRefund ? 'refund_paid' : 'paid';
 
-  // --- NEW: PAYOUT LOGIC ---
-  const handleMarkPaid = async (bookingId, userId, amount) => {
-      let proofUrl = "";
-      if (payoutProof) {
-          toast.loading("Uploading Proof...");
-          proofUrl = await uploadToCloudinary(payoutProof);
-          toast.dismiss();
-      }
+    await updateDoc(doc(db, "bookings", bookingId), {
+        status: newStatus,
+        paymentProof: proofUrl,
+        paidAt: new Date()
+    });
 
-      await updateDoc(doc(db, "bookings", bookingId), {
-          status: 'paid',
-          paymentProof: proofUrl,
-          paidAt: new Date()
-      });
+    await addDoc(collection(db, "notifications"), {
+        userId: userId,
+        title: isRefund ? "💸 REFUND PROCESSED" : "💰 PRIZE PAID!",
+        message: isRefund 
+            ? `Your refund of ₹${amount} has been sent. Check dashboard for proof.`
+            : `Congrats! Your winning amount ₹${amount} has been paid.`,
+        read: false,
+        timestamp: new Date()
+    });
 
-      await addDoc(collection(db, "notifications"), {
-          userId: userId,
-          title: "💰 PRIZE PAID!",
-          message: `Congrats! Your winning amount ₹${amount} has been paid. Check 'My Matches' for proof.`,
-          read: false,
-          timestamp: new Date()
-      });
-
-      await logAction(`Paid ₹${amount} to User ${userId}`);
-      setPayoutProof(null);
-      toast.success("Marked as PAID! ✅");
-  };
+    await logAction(`Paid ₹${amount} (${isRefund ? 'Refund' : 'Prize'}) to User ${userId}`);
+    setPayoutProof(null);
+    toast.success("Marked as PAID! ✅");
+};
 
   // --- G. ADMIN MANAGEMENT FUNCTIONS ---
   const handleCreateAdmin = async (e) => {
@@ -1209,99 +1255,85 @@ const Admin = () => {
         )}
 
         {/* --- NEW: PAYOUTS VIEW --- */}
-        {activeSection === 'payouts' && (
-            <div className="max-w-6xl mx-auto bg-[#111] border border-white/10 rounded-2xl overflow-hidden min-h-[60vh]">
-                <div className="p-5 bg-white/5 border-b border-white/10">
-                    <h3 className="font-bold text-white text-lg flex items-center gap-2"><CreditCard className="text-yellow-500"/> WINNING PAYOUTS</h3>
-                </div>
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                        <thead className="text-xs text-gray-500 border-b border-white/10 bg-black/40">
-                            <tr><th className="p-5">WINNER</th><th className="p-5">AMOUNT</th><th className="p-5">USER QR</th><th className="p-5 text-right">ACTION</th></tr>
-                        </thead>
-                        <tbody>
-                            {bookings.filter(b => b.status === 'won' || b.status === 'processing' || b.status === 'paid').length === 0 && (
-                                <tr><td colSpan="4" className="p-10 text-center text-gray-500">No winnings to process yet.</td></tr>
-                            )}
-                            {bookings.filter(b => b.status === 'won' || b.status === 'processing' || b.status === 'paid').map((b) => (
-                                <tr key={b.id} className="border-b border-white/5 hover:bg-white/5">
-                                    <td className="p-5">
-                                        <p className="font-bold text-white">{b.playerName}</p>
-                                        <p className="text-xs text-gray-500">Match ID: {b.tournamentId}</p>
-                                    </td>
-                                    <td className="p-5 text-green-400 font-bold font-mono">₹{b.prizeAmount || 0}</td>
-                                    <td className="p-5">
-                                        {b.userQr ? (
-                                            <a href={b.userQr} target="_blank" className="text-blue-400 text-xs flex items-center gap-1 underline"><Eye size={12}/> View QR</a>
-                                        ) : <span className="text-gray-600 text-xs">No QR</span>}
-                                    </td>
-                                    <td className="p-5 text-right">
-                                        {b.status === 'paid' ? (
-                                            <span className="text-green-500 text-xs border border-green-500/20 px-2 py-1 rounded">PAID ✅</span>
-                                        ) : (
-                                            <div className="flex flex-col items-end gap-2">
-                                                <div className="relative">
-                                                    <input type="file" onChange={e => setPayoutProof(e.target.files[0])} className="w-20 text-[10px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:bg-gray-800 file:text-white"/>
-                                                </div>
-                                                <button onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount)} className="bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold hover:bg-white">MARK PAID</button>
-                                            </div>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        )}
-
-        {/* --- TEAM MANAGEMENT VIEW --- */}
-        {activeSection === 'team' && userRole === 'super_admin' && (
-            <div className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-8">
-                
-                <div className="space-y-6">
-                    <div className="bg-[#111] p-6 rounded-xl border border-white/10">
-                        <h3 className="text-brand-green font-bold mb-4 flex items-center gap-2"><UserPlus size={18}/> ADD NEW ADMIN</h3>
-                        <form onSubmit={handleCreateAdmin} className="space-y-3">
-                            <input type="text" placeholder="Name (e.g. Manager 1)" className="w-full bg-black p-2 border border-white/20 rounded text-white" value={newAdmin.name} onChange={e=>setNewAdmin({...newAdmin, name: e.target.value})} required/>
-                            <input type="email" placeholder="Login Email" className="w-full bg-black p-2 border border-white/20 rounded text-white" value={newAdmin.email} onChange={e=>setNewAdmin({...newAdmin, email: e.target.value})} required/>
-                            <input type="text" placeholder="Set Password" className="w-full bg-black p-2 border border-white/20 rounded text-white" value={newAdmin.password} onChange={e=>setNewAdmin({...newAdmin, password: e.target.value})} required/>
-                            <button className="w-full bg-white text-black font-bold py-2 rounded hover:bg-gray-200">CREATE ADMIN</button>
-                        </form>
-                    </div>
-
-                    <div className="bg-[#111] p-6 rounded-xl border border-white/10">
-                        <h3 className="text-white font-bold mb-4">ACTIVE ADMINS</h3>
-                        <div className="space-y-2">
-                            {adminList.map(admin => (
-                                <div key={admin.id} className="flex justify-between items-center bg-black p-3 rounded border border-white/10">
-                                    <div>
-                                        <p className="text-white font-bold text-sm">{admin.name}</p>
-                                        <p className="text-gray-500 text-xs">{admin.email} • Pass: {admin.password}</p>
+{activeSection === 'payouts' && (
+    <div className="max-w-6xl mx-auto bg-[#111] border border-white/10 rounded-2xl overflow-hidden min-h-[60vh]">
+        <div className="p-5 bg-white/5 border-b border-white/10">
+            <h3 className="font-bold text-white text-lg flex items-center gap-2"><CreditCard className="text-yellow-500"/> PAYOUTS & REFUNDS</h3>
+            <p className="text-gray-500 text-sm">Process winnings and refunds here</p>
+        </div>
+        <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+                <thead className="text-xs text-gray-500 border-b border-white/10 bg-black/40">
+                    <tr>
+                        <th className="p-5">PLAYER</th>
+                        <th className="p-5">AMOUNT</th>
+                        <th className="p-5">USER QR</th>
+                        <th className="p-5 text-right">ACTION</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {/* Updated Filter Logic */}
+                    {bookings.filter(b => ['won', 'processing', 'paid', 'refund_processing', 'refund_paid'].includes(b.status)).length === 0 && (
+                        <tr>
+                            <td colSpan="4" className="p-10 text-center text-gray-500">
+                                No payouts or refunds pending.
+                            </td>
+                        </tr>
+                    )}
+                    
+                    {/* Updated Map Logic with Tags */}
+                    {bookings
+                        .filter(b => ['won', 'processing', 'paid', 'refund_processing', 'refund_paid'].includes(b.status))
+                        .map((b) => (
+                        <tr key={b.id} className="border-b border-white/5 hover:bg-white/5">
+                            <td className="p-5">
+                                <p className="font-bold text-white">{b.playerName}</p>
+                                <p className="text-xs text-gray-500">Match ID: {b.tournamentId?.slice(0,8)}</p>
+                                {/* Tag dikhao ki ye Winning hai ya Refund */}
+                                {b.status.includes('refund') ? (
+                                    <span className="text-[10px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded mt-1 inline-block">REFUND</span>
+                                ) : (
+                                    <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded mt-1 inline-block">WINNING</span>
+                                )}
+                            </td>
+                            <td className="p-5 text-green-400 font-bold font-mono">₹{b.prizeAmount || 0}</td>
+                            <td className="p-5">
+                                {b.userQr ? (
+                                    <a href={b.userQr} target="_blank" rel="noreferrer" className="text-blue-400 text-xs flex items-center gap-1 underline">
+                                        <Eye size={12}/> View QR
+                                    </a>
+                                ) : <span className="text-gray-600 text-xs">Waiting for User QR...</span>}
+                            </td>
+                            <td className="p-5 text-right">
+                                {(b.status === 'paid' || b.status === 'refund_paid') ? (
+                                    <span className="text-green-500 text-xs border border-green-500/20 px-2 py-1 rounded">
+                                        PAID ✅
+                                    </span>
+                                ) : (
+                                    <div className="flex flex-col items-end gap-2">
+                                        <div className="relative">
+                                            <input 
+                                                type="file" 
+                                                onChange={e => setPayoutProof(e.target.files[0])} 
+                                                className="w-20 text-[10px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:bg-gray-800 file:text-white"
+                                            />
+                                        </div>
+                                        <button 
+                                            onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} 
+                                            className="bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold hover:bg-white"
+                                        >
+                                            MARK PAID
+                                        </button>
                                     </div>
-                                    <button onClick={() => handleDeleteAdmin(admin.id, admin.email)} className="text-red-500 hover:text-white"><Trash2 size={16}/></button>
-                                </div>
-                            ))}
-                            {adminList.length === 0 && <p className="text-gray-600 text-xs">No sub-admins yet.</p>}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="bg-[#111] p-6 rounded-xl border border-white/10 h-[500px] overflow-y-auto">
-                    <h3 className="text-brand-green font-bold mb-4 flex items-center gap-2"><Activity size={18}/> ACTIVITY LOGS</h3>
-                    <div className="space-y-3">
-                        {logs.map(log => (
-                            <div key={log.id} className="border-l-2 border-gray-700 pl-3 py-1">
-                                <p className="text-gray-400 text-[10px]">{new Date(log.timestamp?.seconds * 1000).toLocaleString()}</p>
-                                <p className="text-white text-xs"><span className="text-brand-green">{log.adminEmail}</span> {log.action}</p>
-                            </div>
-                        ))}
-                        {logs.length === 0 && <p className="text-gray-600">No activity recorded yet.</p>}
-                    </div>
-                </div>
-            </div>
-        )}
-
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+)}
         {/* --- SETTINGS VIEW --- */}
         {activeSection === 'settings' && (
           <div className="max-w-4xl mx-auto space-y-8">
@@ -1458,34 +1490,67 @@ const Admin = () => {
             </div>
         )}
 
-        {/* 2. RESULT MODAL */}
-        {showResultModal && (
-            <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50 backdrop-blur-md">
-                <div className="bg-[#111] border border-white/20 w-full max-w-md rounded-2xl p-6 shadow-2xl">
-                    <h3 className="font-bold text-white mb-4 flex items-center gap-2"><ImageIcon className="text-yellow-500"/> UPLOAD RESULTS</h3>
-                    <div className="space-y-4">
-                        <div className="bg-black border border-dashed border-white/20 p-3 rounded text-center cursor-pointer relative hover:border-yellow-500 transition">
-                             <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setPtFile(e.target.files[0])}/>
-                             <div className="flex flex-col items-center">
-                                 {ptFile ? <Check size={20} className="text-green-500"/> : <Upload size={20} className="text-gray-400"/>}
-                                 <p className="text-gray-400 text-xs font-bold mt-1">{ptFile ? ptFile.name : "Select Points Table (Image)"}</p>
-                             </div>
-                        </div>
-                        <div className="bg-black border border-dashed border-white/20 p-3 rounded text-center cursor-pointer relative hover:border-yellow-500 transition">
-                             <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setGfxFile(e.target.files[0])}/>
-                             <div className="flex flex-col items-center">
-                                 {gfxFile ? <Check size={20} className="text-green-500"/> : <Upload size={20} className="text-gray-400"/>}
-                                 <p className="text-gray-400 text-xs font-bold mt-1">{gfxFile ? gfxFile.name : "Select Winner GFX (Image)"}</p>
-                             </div>
-                        </div>
-                        <button onClick={handleUploadResults} disabled={isUploading} className="w-full bg-yellow-500 text-black font-bold py-3 rounded mt-2 hover:bg-white transition flex items-center justify-center gap-2">
-                            {isUploading ? "UPLOADING..." : "CLOSE MATCH & PUBLISH"}
-                        </button>
-                        <button onClick={() => setShowResultModal(false)} className="w-full text-gray-500 text-xs text-center py-2 hover:text-white">Cancel</button>
-                    </div>
+        {/* 2. RESULT MODAL (UPDATED) */}
+{showResultModal && (
+    <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4 z-50 backdrop-blur-md">
+        <div className="bg-[#111] border border-white/20 w-full max-w-md rounded-2xl p-6 shadow-2xl">
+            <h3 className="font-bold text-white mb-4 flex items-center gap-2"><ImageIcon className="text-yellow-500"/> DECLARE WINNERS</h3>
+            
+            {/* Registered Teams Dropdown Logic */}
+            <div className="mb-4 space-y-3 bg-white/5 p-3 rounded-lg">
+                <p className="text-[10px] text-gray-400 uppercase font-bold mb-2">Select Winners from Slot List</p>
+                
+                {selectedMatch?.slotList && selectedMatch.slotList.length > 0 ? (
+                    <>
+                        {selectedMatch?.category === 'BR' ? (
+                            <>
+                                <select className="w-full bg-black border border-yellow-500/50 p-2 rounded text-white text-xs mb-2" value={winners.rank1} onChange={e => setWinners({...winners, rank1: e.target.value})}>
+                                    <option value="">Select Rank #1 (Winner)</option>
+                                    {selectedMatch.slotList.map((team, i) => <option key={i} value={team}>{team}</option>)}
+                                </select>
+
+                                <select className="w-full bg-black border border-gray-500/50 p-2 rounded text-white text-xs mb-2" value={winners.rank2} onChange={e => setWinners({...winners, rank2: e.target.value})}>
+                                    <option value="">Select Rank #2 (Runner Up)</option>
+                                    <option value="None">None</option>
+                                    {selectedMatch.slotList.map((team, i) => <option key={i} value={team}>{team}</option>)}
+                                </select>
+
+                                <select className="w-full bg-black border border-orange-500/50 p-2 rounded text-white text-xs" value={winners.rank3} onChange={e => setWinners({...winners, rank3: e.target.value})}>
+                                    <option value="">Select Rank #3</option>
+                                    <option value="None">None</option>
+                                    {selectedMatch.slotList.map((team, i) => <option key={i} value={team}>{team}</option>)}
+                                </select>
+                            </>
+                        ) : (
+                            <select className="w-full bg-black border border-brand-green p-2 rounded text-white text-xs" value={csWinner} onChange={e => setCsWinner(e.target.value)}>
+                                <option value="">Select Winning Team</option>
+                                {selectedMatch.slotList.map((team, i) => <option key={i} value={team}>{team}</option>)}
+                            </select>
+                        )}
+                    </>
+                ) : (
+                    <p className="text-red-500 text-xs">⚠ No teams registered in slot list yet.</p>
+                )}
+            </div>
+            {/* Image Uploads (Existing) */}
+            <div className="space-y-2">
+                <div className="bg-black border border-dashed border-white/20 p-2 rounded text-center cursor-pointer relative">
+                     <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setPtFile(e.target.files[0])}/>
+                     <p className="text-gray-400 text-[10px]">{ptFile ? ptFile.name : "Upload Points Table (Img)"}</p>
+                </div>
+                <div className="bg-black border border-dashed border-white/20 p-2 rounded text-center cursor-pointer relative">
+                     <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={e => setGfxFile(e.target.files[0])}/>
+                     <p className="text-gray-400 text-[10px]">{gfxFile ? gfxFile.name : "Upload Winner Poster (Img)"}</p>
                 </div>
             </div>
-        )}
+
+            <button onClick={handleDeclareResult} disabled={isUploading} className="w-full bg-yellow-500 text-black font-bold py-3 rounded mt-4 hover:bg-white transition flex items-center justify-center gap-2">
+                {isUploading ? "PROCESSING..." : "DECLARE WINNERS & CLOSE"}
+            </button>
+            <button onClick={() => setShowResultModal(false)} className="w-full text-gray-500 text-xs text-center py-2 hover:text-white">Cancel</button>
+        </div>
+    </div>
+)}
 
         {/* 3. ID/PASS MODAL */}
         {showIdModal && (
@@ -1539,28 +1604,30 @@ const Admin = () => {
             </div>
         )}
 
-        {/* 6. REFUND & DELETE MODAL */}
-        {showDeleteModal && matchToDelete && (
-            <div className="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 backdrop-blur-md">
-                <div className="bg-[#1a1a1a] border border-red-500/30 w-full max-w-md rounded-2xl p-6 shadow-2xl">
-                    <h3 className="font-bold text-white mb-2 text-xl flex items-center gap-2"><Trash2 className="text-red-500"/> DELETE MATCH?</h3>
-                    <p className="text-gray-400 text-sm mb-6">Match: <span className="text-white font-bold">{matchToDelete.title}</span><br/>Deleting this match is permanent.</p>
-                    
-                    <div className="flex flex-col gap-3">
-                        <button onClick={processRefundAndDelete} className="bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-500 flex items-center justify-center gap-2">
-                            💸 REFUND USERS & DELETE
-                            <span className="text-[10px] bg-black/20 px-2 py-0.5 rounded">Recommended</span>
-                        </button>
-                        
-                        <button onClick={processForceDelete} className="bg-red-600/20 text-red-500 border border-red-500/50 py-3 rounded-lg font-bold hover:bg-red-600 hover:text-white">
-                            🗑️ FORCE DELETE (NO REFUND)
-                        </button>
+        {/* 6. CANCEL & DELETE MODAL */}
+{showDeleteModal && matchToDelete && (
+    <div className="fixed inset-0 bg-black/95 flex items-center justify-center p-4 z-50 backdrop-blur-md">
+        <div className="bg-[#1a1a1a] border border-red-500/30 w-full max-w-md rounded-2xl p-6 shadow-2xl">
+            <h3 className="font-bold text-white mb-2 text-xl flex items-center gap-2"><Trash2 className="text-red-500"/> MANAGE MATCH</h3>
+            <p className="text-gray-400 text-sm mb-6">Match: <span className="text-white font-bold">{matchToDelete.title}</span></p>
+            
+            <div className="flex flex-col gap-3">
+                {/* CANCEL BUTTON */}
+                <button onClick={handleCancelMatch} className="bg-orange-500 text-black py-3 rounded-lg font-bold hover:bg-orange-400 flex items-center justify-center gap-2">
+                    🚫 CANCEL & ENABLE REFUNDS
+                    <span className="text-[10px] bg-black/20 px-2 py-0.5 rounded">QR System</span>
+                </button>
+                
+                {/* FORCE DELETE BUTTON */}
+                <button onClick={processForceDelete} className="bg-red-600/20 text-red-500 border border-red-500/50 py-3 rounded-lg font-bold hover:bg-red-600 hover:text-white">
+                    🗑️ FORCE DELETE (NO REFUND)
+                </button>
 
-                        <button onClick={() => setShowDeleteModal(false)} className="text-gray-500 text-sm mt-2 hover:text-white">Cancel</button>
-                    </div>
-                </div>
+                <button onClick={() => setShowDeleteModal(false)} className="text-gray-500 text-sm mt-2 hover:text-white">Close</button>
             </div>
-        )}
+        </div>
+    </div>
+)}
 
       </div>
     </div>

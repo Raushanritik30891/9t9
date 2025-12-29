@@ -73,7 +73,7 @@ const Footer = () => {
                 <div className="flex gap-3">
                    {/* Instagram Link - FIXED */}
                    <a 
-                     href="https://www.instagram.com/9t9_esports"
+                     href="https://www.instagram.com/esports_9t9?igsh=OTJjcTU0YXE0Z255"
                      target="_blank" 
                      rel="noopener noreferrer"
                      className="w-10 h-10 flex items-center justify-center bg-[#151515] rounded-full hover:bg-[#E1306C] hover:text-white transition-all duration-300 border border-white/5"
@@ -95,7 +95,7 @@ const Footer = () => {
                    
                    {/* Website Link - FIXED */}
                    <a 
-                     href="https://9t9esports.com"
+                     href="https://9t9.vercel.app/"
                      target="_blank" 
                      rel="noopener noreferrer"
                      className="w-10 h-10 flex items-center justify-center bg-[#151515] rounded-full hover:bg-[#2563EB] hover:text-white transition-all duration-300 border border-white/5"
@@ -106,7 +106,7 @@ const Footer = () => {
                    
                    {/* WhatsApp Link - FIXED */}
                    <a 
-                     href="https://wa.me/919876543210"
+                     href="https://wa.me/7903401877"
                      target="_blank" 
                      rel="noopener noreferrer"
                      className="w-10 h-10 flex items-center justify-center bg-[#151515] rounded-full hover:bg-[#25D366] hover:text-white transition-all duration-300 border border-white/5"
@@ -146,6 +146,7 @@ const Footer = () => {
                    <li><Link to="/privacy" className="hover:text-brand-green transition flex items-center gap-1"><ChevronRight size={12}/> Privacy Policy</Link></li>
                    <li><Link to="/terms" className="hover:text-brand-green transition flex items-center gap-1"><ChevronRight size={12}/> Terms of Service</Link></li>
                    <li><Link to="/contact" className="hover:text-brand-green transition flex items-center gap-1"><ChevronRight size={12}/> Help Center</Link></li>
+                   <li><Link to="/admin-login" className="hover:text-brand-green transition flex items-center gap-1 text-gray-600 hover:text-brand-green"><ChevronRight size={12}/> Admin Login </Link></li>
                 </ul>
              </div>
 
