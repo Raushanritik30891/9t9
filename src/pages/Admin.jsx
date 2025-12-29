@@ -2,8 +2,8 @@ import { useState, useEffect } from 'react';
 import { db, auth, SUPER_ADMIN_EMAIL, verifyAdmin,logActivity } from '../firebase'; // Updated import
 import { 
   collection, addDoc, deleteDoc, doc, onSnapshot, updateDoc, 
-  setDoc, getDoc, getDocs, query, orderBy, where, writeBatch, 
-  arrayUnion, arrayRemove 
+setDoc, getDoc, getDocs, query, orderBy, where, writeBatch, 
+arrayUnion, arrayRemove, increment, serverTimestamp
 } from 'firebase/firestore';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
@@ -95,6 +95,12 @@ const Admin = () => {
   const [isUploading, setIsUploading] = useState(false);
 
   const [newTicker, setNewTicker] = useState("");
+  // --- NEW STATES FOR BLOG & LEADERBOARD ---
+  const [blogs, setBlogs] = useState([]);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [blogForm, setBlogForm] = useState({ title: '', category: 'News', content: '' });
+  const [lbForm, setLbForm] = useState({ teamName: '', wins: 0, points: 0 });
+  const [blogImage, setBlogImage] = useState(null);
   const [customMsg, setCustomMsg] = useState("");
   const [replyText, setReplyText] = useState(""); 
   
@@ -114,6 +120,25 @@ const Admin = () => {
     prizePool: '', rank1: '', rank2: '', rank3: '', perKill: '', status: 'Open',
     rules: '1. No Emulator allowed\n2. Screenshot mandatory\n3. ID/Pass 10 mins before start.' 
   });
+  // ... baaki states ke baad ...
+
+// --- NEW: FOOTER STATS STATE ---
+const [footerStats, setFooterStats] = useState({ 
+    users: '10K+', 
+    visits: '50K+', 
+    prize: '₹1L+' 
+});
+
+// --- NEW: UPDATE FUNCTION ---
+const handleUpdateStats = async () => {
+    try {
+        await setDoc(doc(db, "settings", "footer_stats"), footerStats);
+        toast.success("Footer Stats Updated Live! 🚀");
+    } catch (error) {
+        console.error(error);
+        toast.error("Failed to update stats");
+    }
+};
 
   const brTypes = ["Solo", "Duo", "Squad"];
   const csTypes = ["1v1", "2v2", "3v3", "4v4", "6v6"];
@@ -139,6 +164,9 @@ const Admin = () => {
   // ==========================
   // 4. DATABASE LISTENERS (UPDATED)
   // ==========================
+// ==========================
+  // 4. DATABASE LISTENERS (FULLY UPDATED)
+  // ==========================
   useEffect(() => {
     // Security Check is already handled above
     
@@ -157,7 +185,17 @@ const Admin = () => {
         setMessages(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    // D. Load Tickers
+    // --- D. NEW: Load Blogs (Step 3 yahan hai) ---
+    const unsubBlogs = onSnapshot(query(collection(db, "blogs"), orderBy("timestamp", "desc")), (snap) => {
+        setBlogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // --- E. NEW: Load Leaderboard (Step 3 yahan hai) ---
+    const unsubLb = onSnapshot(query(collection(db, "leaderboard"), orderBy("points", "desc")), (snap) => {
+        setLeaderboard(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    // F. Load Tickers
     const loadTicker = async () => {
         try {
             const docSnap = await getDoc(doc(db, "settings", "ticker"));
@@ -166,29 +204,27 @@ const Admin = () => {
     };
     loadTicker();
 
-    // E. Load Admin List (Only for Super Admin)
+    // G. Load Admin List (Only for Super Admin)
     const loadAdmins = async () => {
       const user = auth.currentUser;
       if (user && user.email === SUPER_ADMIN_EMAIL) {
-        const unsubAdmins = onSnapshot(collection(db, "admins"), (snap) => {
+        return onSnapshot(collection(db, "admins"), (snap) => {
           setAdminList(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
-        return unsubAdmins;
       }
     };
 
-    // F. Load Activity Logs (Only for Super Admin)
+    // H. Load Activity Logs (Only for Super Admin)
     const loadLogs = async () => {
       const user = auth.currentUser;
       if (user && user.email === SUPER_ADMIN_EMAIL) {
-        const unsubLogs = onSnapshot(query(collection(db, "admin_logs"), orderBy("timestamp", "desc")), (snap) => {
+        return onSnapshot(query(collection(db, "admin_logs"), orderBy("timestamp", "desc")), (snap) => {
           setLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
         });
-        return unsubLogs;
       }
     };
 
-    // Load admin data if super admin
+    // Load admin data variables
     let unsubAdmins, unsubLogs;
     const user = auth.currentUser;
     if (user && user.email === SUPER_ADMIN_EMAIL) {
@@ -196,10 +232,13 @@ const Admin = () => {
       loadLogs().then(unsub => { unsubLogs = unsub; });
     }
 
+    // --- CLEANUP FUNCTION (Step 4 yahan hai) ---
     return () => { 
       unsubTourney(); 
       unsubBookings(); 
       unsubMessages();
+      unsubBlogs(); // ✅ Ab ye error nahi dega kyunki upar define kiya hai
+      unsubLb();    // ✅ Ye bhi sahi chalega
       if (unsubAdmins) unsubAdmins();
       if (unsubLogs) unsubLogs();
     };
@@ -220,7 +259,7 @@ const Admin = () => {
   // --- A. MATCH CREATION ---
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.title || !form.time) return alert("Error: Title and Time are required!");
+    if (!form.title || !form.time) return toast.error("Error: Title and Time are required!");
     
     await addDoc(collection(db, "tournaments"), { 
         ...form, 
@@ -241,21 +280,25 @@ const Admin = () => {
   };
 
   // --- B. BOOKING APPROVAL (EXISTING) ---
+  // --- B. BOOKING APPROVAL (UPDATED WITH AUTO-SLOT) ---
   const handleBookingAction = async (booking, action) => {
       if (action === 'approve') {
           await updateDoc(doc(db, "bookings", booking.id), { status: 'approved' });
           
+          // 🔥 AUTO ADD TO SLOT LIST
+          // Format: "PlayerName (UID: GameID)"
+          const teamEntry = `${booking.teamName || booking.playerName} (UID: ${booking.gameId || 'N/A'})`;
+          
+          await updateDoc(doc(db, "tournaments", booking.tournamentId), { 
+              filledSlots: increment(1),      // 1. Slot count badhayega
+              slotList: arrayUnion(teamEntry) // 2. List me naam jodega
+          });
+
+          // Notification Logic (Same as before)
           const matchRef = doc(db, "tournaments", booking.tournamentId);
           const matchSnap = await getDoc(matchRef);
           let rules = "Follow fair play.";
-          
-          if(matchSnap.exists()) {
-             const data = matchSnap.data();
-             rules = data.rules || rules;
-             if(data.filledSlots < data.totalSlots) {
-                 await updateDoc(matchRef, { filledSlots: (data.filledSlots || 0) + 1 });
-             }
-          }
+          if(matchSnap.exists()) rules = matchSnap.data().rules || rules;
           
           await addDoc(collection(db, "notifications"), {
               userId: booking.userId, 
@@ -265,12 +308,11 @@ const Admin = () => {
               timestamp: new Date()
           });
           
-          // Log the action
-          await logAction(`Approved booking for ${booking.playerName} in match ${booking.tournamentId.slice(0,4)}`);
-          
-          toast.success("User Approved & Notification Sent! ✅");
+          await logAction(`Approved & Added ${booking.playerName} to Match ${booking.tournamentId}`);
+          toast.success("User Approved & Added to Slot List! ✅");
 
       } else {
+          // REJECT LOGIC (Same as old code)
           await updateDoc(doc(db, "bookings", booking.id), { status: 'rejected' });
           await addDoc(collection(db, "notifications"), {
               userId: booking.userId,
@@ -280,9 +322,7 @@ const Admin = () => {
               timestamp: new Date()
           });
           
-          // Log the action
           await logAction(`Rejected booking for ${booking.playerName}`);
-          
           toast.error("User Rejected.");
       }
   };
@@ -591,6 +631,47 @@ const handleDeleteMessage = async (id) => {
     const newCat = e.target.value;
     setForm({ ...form, category: newCat, type: newCat === 'CS' ? '4v4' : 'Squad', totalSlots: newCat === 'CS' ? 2 : 48 });
   };
+  const handleCreateBlog = async (e) => {
+      e.preventDefault();
+      if (!blogForm.title || !blogForm.content) return toast.error("Fill all details!");
+
+      let imageUrl = "";
+      if (blogImage) {
+          toast.loading("Uploading Image...");
+          imageUrl = await uploadToCloudinary(blogImage);
+          toast.dismiss();
+      }
+
+      await addDoc(collection(db, "blogs"), {
+          ...blogForm,
+          image: imageUrl,
+          timestamp: serverTimestamp()
+      });
+
+      setBlogForm({ title: '', category: 'News', content: '' });
+      setBlogImage(null);
+      toast.success("Blog Published! 📰");
+  };
+
+  const handleDeleteBlog = async (id) => {
+      if(confirm("Delete this post?")) {
+          await deleteDoc(doc(db, "blogs", id));
+          toast.success("Blog Deleted!");
+      }
+  };
+
+  // --- J. LEADERBOARD LOGIC ---
+  const handleUpdateLeaderboard = async (e) => {
+      e.preventDefault();
+      await addDoc(collection(db, "leaderboard"), lbForm);
+      setLbForm({ teamName: '', wins: 0, points: 0 });
+      toast.success("Leaderboard Updated! 🏆");
+  };
+
+  const handleDeleteLbEntry = async (id) => {
+      await deleteDoc(doc(db, "leaderboard", id));
+      toast.success("Entry Removed");
+  };
 
   // Show loading while checking role
   if (!userRole) {
@@ -636,6 +717,10 @@ const handleDeleteMessage = async (id) => {
                   { id: 'bookings', icon: Bell, label: 'Requests', badge: pendingCount },
                   { id: 'messages', icon: MessageSquare, label: 'Support', badge: unreadMsgCount },
                   { id: 'settings', icon: Settings, label: 'Settings' },
+                  // 🔽 YE DO LINES ADD KARO 🔽
+                  { id: 'leaderboard', icon: BarChart2, label: 'Leaderboard' },
+                  { id: 'blog', icon: Megaphone, label: 'Blog CMS' },
+                  // 🔼 YAHAN TAK 🔼
                   // Only show TEAM tab for super admin
                   ...(userRole === 'super_admin' ? [{ id: 'team', icon: Shield, label: 'Team' }] : []),
               ].map((item) => (
@@ -781,9 +866,14 @@ const handleDeleteMessage = async (id) => {
                             <input type="text" placeholder="Ex: Daily Scrims #50" className="bg-black border border-white/20 rounded-lg p-3 text-white w-full focus:border-brand-green outline-none" value={form.title} onChange={e => setForm({...form, title: e.target.value})}/>
                         </div>
                         <div>
-                            <label className="text-xs text-gray-500 font-bold uppercase ml-1 mb-1 block">Start Time</label>
-                            <input type="text" placeholder="08:00 PM" className="bg-black border border-white/20 rounded-lg p-3 text-white w-full focus:border-brand-green outline-none" value={form.time} onChange={e => setForm({...form, time: e.target.value})}/>
-                        </div>
+                            <label className="text-xs text-gray-500 font-bold uppercase ml-1 mb-1 block">Start Date & Time</label>
+                            <input 
+                                type="datetime-local" 
+                                className="bg-black border border-white/20 rounded-lg p-3 text-white w-full focus:border-brand-green outline-none font-mono" 
+                                value={form.time} 
+                                onChange={e => setForm({...form, time: e.target.value})}
+                            />
+                        </div>  
                     </div>
 
                     {/* 5. Slots & Fees Configuration */}
@@ -1082,25 +1172,149 @@ const handleDeleteMessage = async (id) => {
             </div>
         )}
 
-        {/* --- SETTINGS VIEW --- */}
-        {activeSection === 'settings' && (
-            <div className="max-w-2xl mx-auto bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
-                <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl"><Megaphone size={24} className="text-brand-green"/> LIVE TICKER MANAGER</h3>
-                <div className="flex gap-3 mb-6">
-                    <input type="text" className="flex-1 bg-black border border-white/20 rounded-lg p-3 text-white outline-none focus:border-brand-green" placeholder="Type new announcement..." value={newTicker} onChange={e => setNewTicker(e.target.value)}/>
-                    <button onClick={addTicker} className="bg-brand-green text-black px-6 font-bold rounded-lg hover:bg-white transition">ADD</button>
+       {activeSection === 'settings' && (
+    <div className="max-w-4xl mx-auto space-y-8">
+        
+        {/* 1. LIVE TICKER MANAGER (EXISTING) */}
+        <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
+            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
+                <Megaphone size={24} className="text-brand-green"/> LIVE TICKER MANAGER
+            </h3>
+            <div className="flex gap-3 mb-6">
+                <input 
+                    type="text" 
+                    className="flex-1 bg-black border border-white/20 rounded-lg p-3 text-white outline-none focus:border-brand-green" 
+                    placeholder="Type new announcement..." 
+                    value={newTicker} 
+                    onChange={e => setNewTicker(e.target.value)}
+                />
+                <button onClick={addTicker} className="bg-brand-green text-black px-6 font-bold rounded-lg hover:bg-white transition">ADD</button>
+            </div>
+            <div className="space-y-2">
+                {tickers.map((msg, idx) => (
+                    <div key={idx} className="bg-white/5 p-4 rounded-lg flex justify-between items-center border border-white/5 group hover:border-brand-green/30">
+                        <span className="text-gray-300 text-sm">{msg}</span>
+                        <button onClick={() => removeTicker(msg)} className="text-red-500 hover:bg-red-500/10 p-2 rounded"><Trash2 size={16}/></button>
+                    </div>
+                ))}
+            </div>
+        </div>
+
+        {/* 2. FOOTER STATISTICS CONTROL (NEW ADDITION) */}
+        <div className="bg-[#111] border border-white/10 p-8 rounded-2xl shadow-xl">
+            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-xl">
+                <BarChart2 size={24} className="text-blue-500"/> FOOTER STATS CONTROL
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-5 mb-6">
+                <div>
+                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Trusted Users</label>
+                    <input 
+                        value={footerStats.users} 
+                        onChange={e => setFooterStats({...footerStats, users: e.target.value})} 
+                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                        placeholder="e.g. 15K+"
+                    />
                 </div>
-                <div className="space-y-2">
-                    {tickers.map((msg, idx) => (
-                        <div key={idx} className="bg-white/5 p-4 rounded-lg flex justify-between items-center border border-white/5 group hover:border-brand-green/30">
-                            <span className="text-gray-300 text-sm">{msg}</span>
-                            <button onClick={() => removeTicker(msg)} className="text-red-500 hover:bg-red-500/10 p-2 rounded"><Trash2 size={16}/></button>
-                        </div>
-                    ))}
+                <div>
+                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Total Visits</label>
+                    <input 
+                        value={footerStats.visits} 
+                        onChange={e => setFooterStats({...footerStats, visits: e.target.value})} 
+                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                        placeholder="e.g. 1M+"
+                    />
+                </div>
+                <div>
+                    <label className="text-xs text-gray-500 block mb-1 uppercase font-bold">Prize Distributed</label>
+                    <input 
+                        value={footerStats.prize} 
+                        onChange={e => setFooterStats({...footerStats, prize: e.target.value})} 
+                        className="bg-black border border-white/20 p-3 rounded-lg text-white w-full outline-none focus:border-blue-500"
+                        placeholder="e.g. ₹5L+"
+                    />
                 </div>
             </div>
+            <button 
+                onClick={handleUpdateStats} 
+                className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-500 transition shadow-lg shadow-blue-900/20"
+            >
+                UPDATE LIVE SITE STATS ⚡
+            </button>
+        </div>
+
+    </div>
+)}
+        {/* --- BLOG CMS VIEW --- */}
+        {activeSection === 'blog' && (
+          <div className="grid md:grid-cols-2 gap-8">
+             <div className="bg-[#111] p-6 rounded-xl border border-white/10">
+                <h3 className="text-white font-bold mb-4 flex items-center gap-2"><Megaphone size={18} className="text-brand-green"/> WRITE NEW POST</h3>
+                <form onSubmit={handleCreateBlog} className="space-y-4">
+                   <input type="text" placeholder="Blog Title" className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-brand-green outline-none" value={blogForm.title} onChange={e=>setBlogForm({...blogForm, title: e.target.value})} />
+                   <select className="w-full bg-black border border-white/20 p-3 rounded text-white outline-none" value={blogForm.category} onChange={e=>setBlogForm({...blogForm, category: e.target.value})}>
+                      <option>News</option><option>Highlight</option><option>Update</option>
+                   </select>
+                   <textarea placeholder="Write content here..." className="w-full h-32 bg-black border border-white/20 p-3 rounded text-white focus:border-brand-green outline-none" value={blogForm.content} onChange={e=>setBlogForm({...blogForm, content: e.target.value})}></textarea>
+                   <div className="bg-black border border-dashed border-white/20 p-3 rounded text-center relative cursor-pointer hover:border-brand-green">
+                        <span className="text-xs text-gray-500">{blogImage ? blogImage.name : "Click to Upload Cover Image"}</span>
+                        <input type="file" onChange={e => setBlogImage(e.target.files[0])} className="absolute inset-0 opacity-0 cursor-pointer"/>
+                   </div>
+                   <button className="bg-brand-green text-black font-bold w-full py-3 rounded hover:bg-white transition">PUBLISH POST</button>
+                </form>
+             </div>
+             <div className="bg-[#111] p-6 rounded-xl border border-white/10 h-[500px] overflow-y-auto">
+                <h3 className="text-white font-bold mb-4">📚 MANAGED POSTS</h3>
+                {blogs.length === 0 && <p className="text-gray-600 text-xs">No blogs posted yet.</p>}
+                {blogs.map(b => (
+                   <div key={b.id} className="flex justify-between items-center bg-black p-3 mb-2 rounded border border-white/10 group hover:border-brand-green/30">
+                      <div className="flex gap-3 items-center">
+                          {b.image && <img src={b.image} alt="" className="w-10 h-10 object-cover rounded"/>}
+                          <div>
+                              <p className="text-white text-sm font-bold truncate w-40">{b.title}</p>
+                              <p className="text-[10px] text-gray-500">{new Date(b.timestamp?.seconds * 1000).toLocaleDateString()}</p>
+                          </div>
+                      </div>
+                      <button onClick={() => handleDeleteBlog(b.id)} className="text-gray-600 hover:text-red-500 transition"><Trash2 size={16}/></button>
+                   </div>
+                ))}
+             </div>
+          </div>
         )}
 
+        {/* --- LEADERBOARD VIEW --- */}
+        {activeSection === 'leaderboard' && (
+          <div className="grid md:grid-cols-2 gap-8">
+             <div className="bg-[#111] p-6 rounded-xl border border-white/10">
+                <h3 className="text-white font-bold mb-4 flex items-center gap-2"><BarChart2 size={18} className="text-yellow-500"/> UPDATE STANDINGS</h3>
+                <form onSubmit={handleUpdateLeaderboard} className="space-y-4">
+                   <input type="text" placeholder="Team Name" className="w-full bg-black border border-white/20 p-3 rounded text-white focus:border-yellow-500 outline-none" value={lbForm.teamName} onChange={e=>setLbForm({...lbForm, teamName: e.target.value})} />
+                   <div className="grid grid-cols-2 gap-4">
+                      <input type="number" placeholder="Total Wins" className="bg-black border border-white/20 p-3 rounded text-white focus:border-yellow-500 outline-none" value={lbForm.wins} onChange={e=>setLbForm({...lbForm, wins: Number(e.target.value)})} />
+                      <input type="number" placeholder="Total Points" className="bg-black border border-white/20 p-3 rounded text-white focus:border-yellow-500 outline-none" value={lbForm.points} onChange={e=>setLbForm({...lbForm, points: Number(e.target.value)})} />
+                   </div>
+                   <button className="bg-yellow-500 text-black font-bold w-full py-3 rounded hover:bg-white transition">ADD TEAM ENTRY</button>
+                </form>
+             </div>
+             <div className="bg-[#111] p-6 rounded-xl border border-white/10 h-[500px] overflow-y-auto">
+                <h3 className="text-white font-bold mb-4">🏆 CURRENT RANKINGS</h3>
+                {leaderboard.map((team, idx) => (
+                   <div key={team.id} className="flex justify-between items-center bg-black p-3 mb-2 rounded border border-white/10 group hover:border-yellow-500/30">
+                      <div className="flex items-center gap-4">
+                          <span className={`font-bold text-lg w-8 text-center ${idx < 3 ? 'text-yellow-500' : 'text-gray-600'}`}>#{idx+1}</span>
+                          <div>
+                              <p className="text-white text-sm font-bold">{team.teamName}</p>
+                              <p className="text-[10px] text-gray-500">{team.wins} Booyahs</p>
+                          </div>
+                      </div>
+                      <div className="flex items-center gap-4">
+                          <p className="text-brand-green text-sm font-bold">{team.points} Pts</p>
+                          <button onClick={() => handleDeleteLbEntry(team.id)} className="text-gray-600 hover:text-red-500"><Trash2 size={14}/></button>
+                      </div>
+                   </div>
+                ))}
+             </div>
+          </div>
+        )}
         {/* ================= MODALS ================= */}
         
         {/* 1. SLOT LIST MODAL */}

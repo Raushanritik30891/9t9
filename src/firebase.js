@@ -1,7 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
-// Niche wali line dhyaan se dekhna, isme addDoc aur serverTimestamp add kiya hai
 import { getFirestore, collection, query, where, getDocs, addDoc, serverTimestamp } from "firebase/firestore"; 
 import { getStorage } from "firebase/storage";
 
@@ -15,21 +14,29 @@ const firebaseConfig = {
   measurementId: "G-7SLBXYV433"
 };
 
+// Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 
+// Export Services
 export const auth = getAuth(app);
 export const db = getFirestore(app);
-export const storage = getStorage(app);
+export const storage = getStorage(app); // ✅ Blog Images ke liye ye zaroori hai
 export const provider = new GoogleAuthProvider();
 
+// Super Admin Config
 export const SUPER_ADMIN_EMAIL = "raushanritik30891@gmail.com";
 
+// Verify Admin Function
 export const verifyAdmin = async (email) => {
   if (!email) return null;
+  
+  // 1. Check Hardcoded Super Admin
   if (email === SUPER_ADMIN_EMAIL) {
     return { role: 'super_admin', name: 'Owner', email: email };
   }
+
+  // 2. Check Database for Sub-Admins
   try {
     const adminsRef = collection(db, "admins");
     const q = query(adminsRef, where("email", "==", email));
@@ -43,16 +50,20 @@ export const verifyAdmin = async (email) => {
   return null;
 };
 
-// ✅ YE FUNCTION MISSING THA - ISE ADD KIYA HAI
-export const logActivity = async (db, email, action) => {
+// Log Activity Function (Crash-Proof)
+export const logActivity = async (dbInstance, email, action) => {
+  // Agar dbInstance pass nahi hua, to default db use karein
+  const targetDb = dbInstance || db; 
+  
   try {
-    await addDoc(collection(db, "admin_logs"), {
+    await addDoc(collection(targetDb, "admin_logs"), {
       adminEmail: email,
       action: action,
       timestamp: serverTimestamp()
     });
   } catch (error) {
-    console.error("Logging failed:", error);
+    console.error("Logging failed (Minor):", error);
+    // Logging fail hone se app crash nahi hona chahiye
   }
 };
 
