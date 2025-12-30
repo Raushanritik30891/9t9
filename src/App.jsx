@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import ScrollToTop from './components/ScrollToTop';
 
 // Pages Imports
@@ -62,6 +63,9 @@ function App() {
           },
         }} 
       />
+
+      {/* VERCEL SPEED INSIGHTS */}
+      <SpeedInsights />
     </Router>
   );
 }
