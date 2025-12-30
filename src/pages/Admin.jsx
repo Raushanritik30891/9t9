@@ -1319,122 +1319,97 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
             </div>
         )}
 
-        {/* --- NEW: PAYOUTS VIEW --- */}
 {activeSection === 'payouts' && (
     <div className="max-w-6xl mx-auto bg-[#111] border border-white/10 rounded-2xl overflow-hidden min-h-[60vh]">
         <div className="p-5 bg-white/5 border-b border-white/10">
             <h3 className="font-bold text-white text-lg flex items-center gap-2"><CreditCard className="text-yellow-500"/> PAYOUTS & REFUNDS</h3>
-            <p className="text-gray-500 text-sm">Process winnings and refunds here</p>
-            {/* Tabs for Winnings vs Refunds */}
-<div className="flex gap-2 mt-3">
-    <button 
-        onClick={() => setBookingTab('winnings')} 
-        className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
-            bookingTab === 'winnings' 
-            ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/20' 
-            : 'bg-white/10 text-gray-400 hover:text-white'
-        }`}
-    >
-        WINNINGS ({bookings.filter(b => b.status === 'won').length})
-    </button>
-    <button 
-        onClick={() => setBookingTab('refunds')} 
-        className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
-            bookingTab === 'refunds' 
-            ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' 
-            : 'bg-white/10 text-gray-400 hover:text-white'
-        }`}
-    >
-        REFUNDS ({bookings.filter(b => b.status === 'refund_pending').length})
-    </button>
-    </div>
+            
+            {/* ✅ Payout Tabs (Filter Logic) */}
+            <div className="flex gap-2 mt-4">
+                <button 
+                    onClick={() => setBookingTab('winnings')} 
+                    className={`px-4 py-2 rounded-lg font-bold text-xs transition ${bookingTab === 'winnings' ? 'bg-yellow-500 text-black' : 'bg-white/10 text-gray-400'}`}
+                >
+                    WINNINGS ({bookings.filter(b => b.status === 'won' || b.status === 'processing').length})
+                </button>
+                <button 
+                    onClick={() => setBookingTab('refunds')} 
+                    className={`px-4 py-2 rounded-lg font-bold text-xs transition ${bookingTab === 'refunds' ? 'bg-orange-500 text-white' : 'bg-white/10 text-gray-400'}`}
+                >
+                    REFUNDS ({bookings.filter(b => b.status === 'refund_pending' || b.status === 'refund_processing').length})
+                </button>
+                <button 
+                    onClick={() => setBookingTab('paid_history')} 
+                    className={`px-4 py-2 rounded-lg font-bold text-xs transition ${bookingTab === 'paid_history' ? 'bg-green-600 text-white' : 'bg-white/10 text-gray-400'}`}
+                >
+                    PAID HISTORY
+                </button>
+            </div>
         </div>
+
         <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
                 <thead className="text-xs text-gray-500 border-b border-white/10 bg-black/40">
                     <tr>
-                        <th className="p-5">PLAYER</th>
+                        <th className="p-5">PLAYER & MATCH</th>
                         <th className="p-5">AMOUNT</th>
                         <th className="p-5">USER QR</th>
                         <th className="p-5 text-right">ACTION</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {/* Updated Filter Logic */}
-                    {bookings.filter(b => ['won', 'processing', 'paid', 'refund_processing', 'refund_paid'].includes(b.status)).length === 0 && (
-                        <tr>
-                            <td colSpan="4" className="p-10 text-center text-gray-500">
-                                No payouts or refunds pending.
-                            </td>
-                        </tr>
-                    )}
-                    
-                    {/* Updated Map Logic with Tags */}
-                    {bookings
-                        .filter(b => ['won', 'processing', 'paid', 'refund_processing', 'refund_paid'].includes(b.status))
-                        .map((b) => (
-                        <tr key={b.id} className="border-b border-white/5 hover:bg-white/5">
-                            <td className="p-5">
-                                <p className="font-bold text-white">{b.playerName}</p>
-                                <p className="text-xs text-gray-500">Match ID: {b.tournamentId?.slice(0,8)}</p>
-                                {/* Tag dikhao ki ye Winning hai ya Refund */}
-                                {b.status.includes('refund') ? (
-                                    <span className="text-[10px] bg-red-500/20 text-red-400 px-2 py-0.5 rounded mt-1 inline-block">REFUND</span>
-                                ) : (
-                                    <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-2 py-0.5 rounded mt-1 inline-block">WINNING</span>
-                                )}
-                            </td>
-                            <td className="p-5 text-green-400 font-bold font-mono">₹{b.prizeAmount || 0}</td>
-                            <td className="p-5">
-                                {b.userQr ? (
-                                    <a href={b.userQr} target="_blank" rel="noreferrer" className="text-blue-400 text-xs flex items-center gap-1 underline">
-                                        <Eye size={12}/> View QR
-                                    </a>
-                                ) : <span className="text-gray-600 text-xs">Waiting for User QR...</span>}
-                            </td>
-                            <td className="p-5 text-right">
-                                {(b.status === 'paid' || b.status === 'refund_paid') ? (
-                                    <span className="text-green-500 text-xs border border-green-500/20 px-2 py-1 rounded">
-                                        PAID ✅
-                                    </span>
-                                ) : (
-                                    <div className="flex flex-col items-end gap-2">
-                                        <div className="relative">
-                                            <input 
-                                                type="file" 
-                                                onChange={e => setPayoutProof(e.target.files[0])} 
-                                                className="w-20 text-[10px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:bg-gray-800 file:text-white"
-                                            />
+                    {/* ✅ SMART FILTER LOGIC */}
+                    {bookings.filter(b => {
+                        if (bookingTab === 'winnings') return b.status === 'won' || b.status === 'processing';
+                        if (bookingTab === 'refunds') return b.status === 'refund_pending' || b.status === 'refund_processing';
+                        if (bookingTab === 'paid_history') return b.status === 'paid' || b.status === 'refund_paid';
+                        return false;
+                    }).length === 0 ? (
+                        <tr><td colSpan="4" className="p-10 text-center text-gray-500">No records found for this tab.</td></tr>
+                    ) : (
+                        bookings.filter(b => {
+                            if (bookingTab === 'winnings') return b.status === 'won' || b.status === 'processing';
+                            if (bookingTab === 'refunds') return b.status === 'refund_pending' || b.status === 'refund_processing';
+                            if (bookingTab === 'paid_history') return b.status === 'paid' || b.status === 'refund_paid';
+                            return false;
+                        }).map((b) => (
+                            <tr key={b.id} className="border-b border-white/5 hover:bg-white/5 transition">
+                                <td className="p-5">
+                                    <p className="font-bold text-white">{b.playerName}</p>
+                                    <p className="text-[10px] text-gray-500">Match ID: {b.tournamentId?.slice(0,8)}</p>
+                                </td>
+                                <td className="p-5 text-green-400 font-bold font-mono">₹{b.prizeAmount || 0}</td>
+                                <td className="p-5">
+                                    {b.userQr ? (
+                                        <a href={b.userQr} target="_blank" rel="noreferrer" className="text-blue-400 text-xs flex items-center gap-1 underline"><Eye size={12}/> View QR</a>
+                                    ) : <span className="text-gray-600 text-[10px]">Waiting for QR...</span>}
+                                </td>
+                                <td className="p-5 text-right">
+                                    {b.status.includes('paid') ? (
+                                        <span className="text-green-500 text-xs font-bold">PAID ✅</span>
+                                    ) : (
+                                        <div className="flex flex-col items-end gap-2">
+                                            <input type="file" onChange={e => setPayoutProof(e.target.files[0])} className="text-[9px] w-24 text-gray-500" />
+                                            <button 
+                                                onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} 
+                                                disabled={!b.userQr}
+                                                className={`px-3 py-1.5 rounded text-[10px] font-bold transition ${!b.userQr ? 'bg-gray-700 text-gray-500' : b.status.includes('refund') ? 'bg-orange-500 text-black' : 'bg-yellow-500 text-black'}`}
+                                            >
+                                                {b.status.includes('refund') ? 'SEND REFUND' : 'MARK PAID'}
+                                            </button>
                                         </div>
-                                       <button 
-    onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} 
-    disabled={!b.userQr} // 🔒 Lock button if no QR
-    className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
-        !b.userQr 
-        ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
-        : b.status.includes('refund') 
-            ? 'bg-orange-500 text-black hover:bg-white' 
-            : 'bg-yellow-500 text-black hover:bg-white'
-    }`}
->
-    {!b.userQr ? (
-        <>⏳ WAIT FOR QR</> 
-    ) : b.status.includes('refund') ? (
-        <>💸 SEND REFUND</>
-    ) : (
-        <>✅ PAY WINNINGS</>
-    )}
-</button>
-                                    </div>
-                                )}
-                            </td>
-                        </tr>
-                    ))}
+                                    )}
+                                </td>
+                            </tr>
+                        ))
+                    )}
                 </tbody>
             </table>
         </div>
     </div>
 )}
+                    
+
         {/* --- SETTINGS VIEW --- */}
         {activeSection === 'settings' && (
           <div className="max-w-4xl mx-auto space-y-8">
