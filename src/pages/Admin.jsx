@@ -1407,16 +1407,22 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
                                             />
                                         </div>
                                        <button 
-                                        onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} disabled={!b.userQr} // 👈 YE LINE ZARURI HAI (Button Disable agar QR nahi hai)
-                                        className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1 ${ !b.userQr 
-        ? 'bg-gray-700 text-gray-500 cursor-not-allowed opacity-50' // Disabled Style
-        : 'bg-yellow-500 text-black hover:bg-white' // Active Style
+    onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} 
+    disabled={!b.userQr} // 🔒 Lock button if no QR
+    className={`px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-2 ${
+        !b.userQr 
+        ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
+        : b.status.includes('refund') 
+            ? 'bg-orange-500 text-black hover:bg-white' 
+            : 'bg-yellow-500 text-black hover:bg-white'
     }`}
 >
     {!b.userQr ? (
         <>⏳ WAIT FOR QR</> 
+    ) : b.status.includes('refund') ? (
+        <>💸 SEND REFUND</>
     ) : (
-        <>✅ MARK PAID</>
+        <>✅ PAY WINNINGS</>
     )}
 </button>
                                     </div>
