@@ -597,45 +597,93 @@ const handleDeclareResult = async () => {
     }
   };
 
-// --- UPDATED: CANCEL MATCH LOGIC (Wallet Hata Diya) ---
+// --- CANCEL MATCH LOGIC (With Refund QR Trigger) ---
 const handleCancelMatch = async () => {
-  if (!matchToDelete) return;
-  const toastId = toast.loading("Cancelling Match & Enabling Refunds...");
+    if (!matchToDelete) return;
 
-  try {
-    // 1. Sare Bookings dhundo is match ki
-    const q = query(collection(db, "bookings"), where("tournamentId", "==", matchToDelete.id), where("status", "==", "approved"));
-    const snapshot = await getDocs(q);
+    // Safety Prompt
+    const confirmCancel = window.confirm(`Are you sure you want to CANCEL "${matchToDelete.title}"? \nThis will ask all players to upload QR for Refund.`);
+    if (!confirmCancel) return;
 
-    const batch = writeBatch(db);
+    const toastId = toast.loading("Cancelling Match & Enabling Refunds...");
 
-    // 2. Har user ka status 'refund_pending' karo
-    snapshot.forEach((docSnap) => {
-        batch.update(doc(db, "bookings", docSnap.id), { 
-            status: 'refund_pending', // User ab QR upload karega
-            prizeAmount: matchToDelete.fee // Refund amount set kiya
+    try {
+        // 1. Is match ke saare Approved bookings dhundo
+        const q = query(collection(db, "bookings"), where("tournamentId", "==", matchToDelete.id), where("status", "==", "approved"));
+        const snapshot = await getDocs(q);
+
+        const batch = writeBatch(db);
+
+        // 2. Har user ka status 'refund_pending' karo (Taki wo QR daal sake)
+        snapshot.forEach((docSnap) => {
+            batch.update(doc(db, "bookings", docSnap.id), { 
+                status: 'refund_pending', // ✅ Isse user ko QR upload ka option dikhega
+                prizeAmount: matchToDelete.fee || 0, // ✅ Refund amount = Entry Fee
+                adminMessage: "Match Cancelled. Please upload QR for refund."
+            });
         });
-    });
 
-    // 3. Match ka status 'Cancelled' karo (Delete mat karo taki record rahe)
-    batch.update(doc(db, "tournaments", matchToDelete.id), {
-        status: 'Cancelled'
-    });
+        // 3. Match ka status 'Cancelled' karo
+        batch.update(doc(db, "tournaments", matchToDelete.id), {
+            status: 'Cancelled',
+            slotList: [] // Slot list saaf kar do
+        });
 
-    await batch.commit();
+        await batch.commit();
 
-    await logAction(`Cancelled match ${matchToDelete.title}. Refunds enabled for ${snapshot.size} players.`);
-    toast.success(`Match Cancelled! ${snapshot.size} players can now claim refund via QR.`, { id: toastId });
-    setShowDeleteModal(false);
-    setMatchToDelete(null);
+        await logAction(`Cancelled match ${matchToDelete.title}. Refunds enabled for ${snapshot.size} players.`);
+        toast.success(`Match Cancelled! ${snapshot.size} players can now claim refund via QR.`, { id: toastId });
+        setShowDeleteModal(false);
+        setMatchToDelete(null);
 
-  } catch (error) {
-    console.error("Cancel Error:", error);
-    toast.error("Failed to cancel match.", { id: toastId });
-  }
+    } catch (error) {
+        console.error("Cancel Error:", error);
+        toast.error("Failed to cancel match.", { id: toastId });
+    }
 };
-  // --- UPDATED PAYOUT LOGIC ---
+// --- FORCE DELETE FUNCTION (Missing Tha) ---
+const processForceDelete = async () => {
+    if (!matchToDelete) return;
+    
+    // Safety confirm
+    const confirmDelete = window.confirm("⚠️ WARNING: This will permanently delete the match. Are you sure?");
+    if (!confirmDelete) return;
+
+    try {
+        // 1. Delete Tournament Doc
+        await deleteDoc(doc(db, "tournaments", matchToDelete.id));
+        
+        // 2. Log Action
+        await logAction(`Force deleted match: ${matchToDelete.title} (ID: ${matchToDelete.id})`);
+        
+        toast.success("Match Deleted Permanently! 🗑️");
+        setShowDeleteModal(false);
+        setMatchToDelete(null);
+    } catch (error) {
+        console.error("Delete Error:", error);
+        toast.error("Failed to delete match.");
+    }
+};
+// --- HANDLE PAYOUT / REFUND DONE ---
 const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
+    
+    // ✅ पहले check करो कि user ने QR upload किया है या नहीं
+    const bookingDoc = await getDoc(doc(db, "bookings", bookingId));
+    if (!bookingDoc.exists()) {
+        toast.error("Booking not found");
+        return;
+    }
+
+    const bookingData = bookingDoc.data();
+    
+    if (!bookingData.userQr) {
+        toast.error("User hasn't uploaded QR yet!");
+        return;
+    }
+
+    // Agar Refund hai to status 'refund_paid' hoga, jeeta hai to 'paid'
+    const newStatus = isRefund ? 'refund_paid' : 'paid'; 
+
     let proofUrl = "";
     if (payoutProof) {
         toast.loading("Uploading Proof...");
@@ -643,29 +691,46 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
         toast.dismiss();
     }
 
-    const newStatus = isRefund ? 'refund_paid' : 'paid';
+    try {
+        await updateDoc(doc(db, "bookings", bookingId), {
+            status: newStatus,
+            paymentProof: proofUrl,
+            paidAt: new Date(),
+            paidBy: userName || 'Admin' // ✅ Yeh line add karo
+        });
 
-    await updateDoc(doc(db, "bookings", bookingId), {
-        status: newStatus,
-        paymentProof: proofUrl,
-        paidAt: new Date()
-    });
+        // Notification bhejo
+        await addDoc(collection(db, "notifications"), {
+            userId: userId,
+            title: isRefund ? "💸 REFUND SUCCESSFUL" : "💰 PRIZE PAID!",
+            message: isRefund 
+                ? `Your refund of ₹${amount} has been processed successfully.`
+                : `Congrats! Your winning amount ₹${amount} has been paid.`,
+            read: false,
+            timestamp: new Date()
+        });
 
-    await addDoc(collection(db, "notifications"), {
-        userId: userId,
-        title: isRefund ? "💸 REFUND PROCESSED" : "💰 PRIZE PAID!",
-        message: isRefund 
-            ? `Your refund of ₹${amount} has been sent. Check dashboard for proof.`
-            : `Congrats! Your winning amount ₹${amount} has been paid.`,
-        read: false,
-        timestamp: new Date()
-    });
+        // ✅ User inbox में भी notification bhejo
+        await addDoc(collection(db, "user_inbox"), {
+            userId: userId,
+            title: isRefund ? "💸 REFUND PROCESSED" : "💰 PAYMENT RECEIVED",
+            message: isRefund 
+                ? `Your refund of ₹${amount} has been sent to your UPI.`
+                : `You received ₹${amount} for winning. Check your UPI app.`,
+            type: 'announcement',
+            timestamp: new Date(),
+            read: false
+        });
 
-    await logAction(`Paid ₹${amount} (${isRefund ? 'Refund' : 'Prize'}) to User ${userId}`);
-    setPayoutProof(null);
-    toast.success("Marked as PAID! ✅");
+        await logAction(`Paid ₹${amount} (${isRefund ? 'Refund' : 'Prize'}) to User ${userId}`);
+        setPayoutProof(null);
+        toast.success(isRefund ? "Refund Marked as Paid! ✅" : "Prize Marked as Paid! ✅");
+
+    } catch (error) {
+        console.error(error);
+        toast.error("Error updating status");
+    }
 };
-
   // --- G. ADMIN MANAGEMENT FUNCTIONS ---
   const handleCreateAdmin = async (e) => {
     e.preventDefault();
@@ -1260,6 +1325,29 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
         <div className="p-5 bg-white/5 border-b border-white/10">
             <h3 className="font-bold text-white text-lg flex items-center gap-2"><CreditCard className="text-yellow-500"/> PAYOUTS & REFUNDS</h3>
             <p className="text-gray-500 text-sm">Process winnings and refunds here</p>
+            {/* Tabs for Winnings vs Refunds */}
+<div className="flex gap-2 mt-3">
+    <button 
+        onClick={() => setBookingTab('winnings')} 
+        className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
+            bookingTab === 'winnings' 
+            ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/20' 
+            : 'bg-white/10 text-gray-400 hover:text-white'
+        }`}
+    >
+        WINNINGS ({bookings.filter(b => b.status === 'won').length})
+    </button>
+    <button 
+        onClick={() => setBookingTab('refunds')} 
+        className={`px-4 py-2 rounded-lg font-bold text-sm transition ${
+            bookingTab === 'refunds' 
+            ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' 
+            : 'bg-white/10 text-gray-400 hover:text-white'
+        }`}
+    >
+        REFUNDS ({bookings.filter(b => b.status === 'refund_pending').length})
+    </button>
+    </div>
         </div>
         <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
@@ -1318,12 +1406,19 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
                                                 className="w-20 text-[10px] text-gray-500 file:mr-2 file:py-1 file:px-2 file:rounded-full file:border-0 file:text-[10px] file:bg-gray-800 file:text-white"
                                             />
                                         </div>
-                                        <button 
-                                            onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} 
-                                            className="bg-yellow-500 text-black px-3 py-1 rounded text-xs font-bold hover:bg-white"
-                                        >
-                                            MARK PAID
-                                        </button>
+                                       <button 
+                                        onClick={() => handleMarkPaid(b.id, b.userId, b.prizeAmount, b.status.includes('refund'))} disabled={!b.userQr} // 👈 YE LINE ZARURI HAI (Button Disable agar QR nahi hai)
+                                        className={`px-3 py-1 rounded text-xs font-bold transition flex items-center gap-1 ${ !b.userQr 
+        ? 'bg-gray-700 text-gray-500 cursor-not-allowed opacity-50' // Disabled Style
+        : 'bg-yellow-500 text-black hover:bg-white' // Active Style
+    }`}
+>
+    {!b.userQr ? (
+        <>⏳ WAIT FOR QR</> 
+    ) : (
+        <>✅ MARK PAID</>
+    )}
+</button>
                                     </div>
                                 )}
                             </td>

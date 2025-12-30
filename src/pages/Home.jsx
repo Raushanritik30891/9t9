@@ -63,41 +63,37 @@ const Home = () => {
     return () => { unsubAuth(); unsubTourney(); };
   }, []);
 
-  // ✅ 2. FILTER LOGIC (Time Based)
-  const now = new Date();
-  
-  const liveMatches = tournaments.filter(m => {
-      const matchTime = new Date(m.time);
-      // Logic: Status NOT Completed AND (Time is future OR Time is less than 3 hours ago - buffer for ongoing)
-      return m.status !== 'Completed' && (matchTime > now || (now - matchTime) < 3 * 60 * 60 * 1000);
-  });
+// ✅ 2. UPDATED FILTER LOGIC (Time Based + Status Based)
+const now = new Date();
 
-  const pastMatches = tournaments.filter(m => {
-      const matchTime = new Date(m.time);
-      // Logic: Status IS Completed OR Time is way past (older than 3 hours)
-      return m.status === 'Completed' || (now - matchTime) >= 3 * 60 * 60 * 1000;
-  });
+const liveMatches = tournaments.filter(m => {
+    const matchTime = new Date(m.time);
+    const isActive = m.status === 'Open' || m.status === 'ID Released';
+    const isBeforeMatchTime = matchTime > now;
+    const isWithinBuffer = (now - matchTime) < 3 * 60 * 60 * 1000; // 3 hours buffer
+    const hasSlotsAvailable = m.filledSlots < m.totalSlots;
+    
+    // Live matches: Active status, time not passed (or within buffer), and slots available
+    return isActive && (isBeforeMatchTime || isWithinBuffer) && hasSlotsAvailable;
+});
 
-  const displayMatches = matchTab === 'live' ? liveMatches : pastMatches;
+const pastMatches = tournaments.filter(m => {
+    const matchTime = new Date(m.time);
+    const isEndedStatus = m.status === 'Completed' || m.status === 'Cancelled';
+    const isTimePassed = (now - matchTime) >= 3 * 60 * 60 * 1000; // 3+ hours ago
+    const isFullAndTimePassed = m.filledSlots >= m.totalSlots && (now - matchTime) >= 0; // Full and time passed
+    
+    // Past matches: Ended status OR time passed OR full slots after match time
+    return isEndedStatus || isTimePassed || isFullAndTimePassed;
+});
 
-  const handleCopy = () => {
-      navigator.clipboard.writeText(ADMIN_UPI_ID);
-      toast.success("UPI ID Copied! 📋");
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-  };
+const displayMatches = matchTab === 'live' ? liveMatches : pastMatches;
 
+  // ✅ 3. HANDLE BOOKING SUBMISSION
   const handleBookingSubmit = async (e) => {
     e.preventDefault();
-    if (!user) return navigate('/login');
     
-    if (!bookingForm.playerName || !bookingForm.whatsapp) {
-        return toast.error("Please fill Name & WhatsApp! ❌");
-    }
-
-    // ✅ 3. DUPLICATE TEAM NAME CHECK
-    // Slot List format: ["TeamName (UID: 123)", ...]
-    // Hum check karenge ki kya enter kiya hua naam pehle se slot list mein exist karta hai?
+    // Duplicate team name check
     if (bookingMatch.slotList && bookingMatch.slotList.length > 0) {
         const isDuplicate = bookingMatch.slotList.some(entry => 
             entry.toLowerCase().includes(bookingForm.playerName.toLowerCase())
@@ -152,6 +148,13 @@ const Home = () => {
       toast.error("Something went wrong. Try again.");
     }
     setIsSubmitting(false);
+  };
+
+  // ✅ 4. HANDLE COPY UPI ID
+  const handleCopy = () => {
+    navigator.clipboard.writeText(ADMIN_UPI_ID);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
@@ -244,16 +247,34 @@ const Home = () => {
                         <span className={`text-[10px] font-bold px-2 py-1 rounded uppercase tracking-wider ${match.category === 'CS' ? 'bg-yellow-500/20 text-yellow-500' : 'bg-blue-500/20 text-blue-500'}`}>
                             {match.category} • {match.map}
                         </span>
-                        {isEnded ? (
-                            <span className="text-[10px] bg-red-500 text-white px-2 py-1 rounded font-bold">ENDED</span>
-                        ) : isLiveNow ? (
-                            <span className="text-[10px] bg-green-500 text-black px-2 py-1 rounded font-bold animate-pulse">LIVE NOW</span>
-                        ) : (
-                            <span className="text-[10px] bg-white/10 text-white px-2 py-1 rounded font-bold">UPCOMING</span>
-                        )}
-                    </div>
-                    <div className="text-right"><span className="text-brand-green font-bold text-lg leading-none block">₹{match.prizePool}</span><span className="text-[9px] text-gray-500 uppercase font-bold">PRIZE</span></div>
-                </div>
+                        {/* ✅ UPDATED STATUS BADGES */}
+        {match.status === 'Completed' ? (
+            <span className="text-[10px] bg-green-500/20 text-green-500 px-2 py-1 rounded font-bold">
+                RESULTS OUT
+            </span>
+        ) : match.status === 'Cancelled' ? (
+            <span className="text-[10px] bg-red-500/20 text-red-500 px-2 py-1 rounded font-bold">
+                CANCELLED
+            </span>
+        ) : isFull ? (
+            <span className="text-[10px] bg-orange-500/20 text-orange-500 px-2 py-1 rounded font-bold">
+                FULL
+            </span>
+        ) : isLiveNow ? (
+            <span className="text-[10px] bg-green-500 text-black px-2 py-1 rounded font-bold animate-pulse">
+                LIVE NOW
+            </span>
+        ) : (
+            <span className="text-[10px] bg-white/10 text-white px-2 py-1 rounded font-bold">
+                UPCOMING
+            </span>
+        )}
+    </div>
+    <div className="text-right">
+        <span className="text-brand-green font-bold text-lg leading-none block">₹{match.prizePool}</span>
+        <span className="text-[9px] text-gray-500 uppercase font-bold">PRIZE</span>
+    </div>
+</div>
                 
                 <div className="p-6 flex-1 flex flex-col">
                     <h3 className="text-xl font-bold text-white mb-4 truncate font-gaming tracking-wide">{match.title}</h3>

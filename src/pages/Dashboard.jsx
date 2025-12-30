@@ -30,15 +30,16 @@ const Dashboard = () => {
   const [unreadCount, setUnreadCount] = useState(0); 
 
   // UI States
-  const [activeTab, setActiveTab] = useState('matches'); 
+  const [activeTab, setActiveTab] = useState('matches');
+  const [bookingTab, setBookingTab] = useState('all');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [editForm, setEditForm] = useState({ gameName: '', uid: '' });
   
   // Action States (Upload/Report)
   const [qrFile, setQrFile] = useState(null);
   const [uploadingId, setUploadingId] = useState(null);
-  const [reportMatch, setReportMatch] = useState(null); // Which match is being reported
-  const [issueText, setIssueText] = useState(""); // Issue description
+  const [reportMatch, setReportMatch] = useState(null);
+  const [issueText, setIssueText] = useState("");
 
   const navigate = useNavigate();
 
@@ -106,35 +107,55 @@ const Dashboard = () => {
 
   // ✅ SMART QR UPLOAD (Handles Winner Prize & Refund Claim)
   const handleQrSubmit = async (bookingId, isRefund) => {
-    if (!qrFile) return toast.error("Please select a QR Code image!");
-    setUploadingId(bookingId);
-    
-    try {
-      // Upload to Cloudinary
-      const formData = new FormData();
-      formData.append("file", qrFile);
-      formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
-      formData.append("cloud_name", CLOUDINARY_CLOUD_NAME);
-
-      const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, { method: "POST", body: formData });
-      const data = await res.json();
+      if (!qrFile) return toast.error("Please select a QR Code image!");
+      setUploadingId(bookingId);
       
-      if(data.secure_url) {
-        // Decide status based on flow (Refund or Win)
-        const nextStatus = isRefund ? 'refund_processing' : 'processing';
-        
-        await updateDoc(doc(db, "bookings", bookingId), {
-          userQr: data.secure_url,
-          status: nextStatus
+      try {
+        // Upload to Cloudinary
+        const formData = new FormData();
+        formData.append("file", qrFile);
+        formData.append("upload_preset", CLOUDINARY_UPLOAD_PRESET);
+        formData.append("cloud_name", CLOUDINARY_CLOUD_NAME);
+
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/image/upload`, { 
+          method: "POST", 
+          body: formData 
         });
-        toast.success(isRefund ? "Refund Request Sent! 💸" : "Prize Claim Sent! 🏆");
-        setQrFile(null);
+        const data = await res.json();
+        
+        if(data.secure_url) {
+          // Update booking with QR (Status change nahi karo)
+          await updateDoc(doc(db, "bookings", bookingId), {
+            userQr: data.secure_url,
+            qrUploadedAt: new Date()
+            // IMPORTANT: Status change mat karo, bas QR add karo
+            // Admin status change karega payment ke baad
+          });
+          
+          // Send notification to admin (optional)
+          const booking = myBookings.find(b => b.id === bookingId);
+          if (booking) {
+            await addDoc(collection(db, "admin_notifications"), {
+              type: isRefund ? 'refund_qr_uploaded' : 'winning_qr_uploaded',
+              bookingId: bookingId,
+              userId: user.uid,
+              playerName: booking.playerName,
+              amount: booking.prizeAmount || booking.fee,
+              qrUrl: data.secure_url,
+              timestamp: new Date(),
+              read: false
+            });
+          }
+          
+          toast.success(isRefund ? "Refund QR Submitted! 💸" : "Prize QR Submitted! 🏆");
+          toast("Admin will process payment soon.", { icon: '⏳' });
+          setQrFile(null);
+        }
+      } catch (error) {
+        console.error(error);
+        toast.error("Upload failed.");
       }
-    } catch (error) {
-      console.error(error);
-      toast.error("Upload failed.");
-    }
-    setUploadingId(null);
+      setUploadingId(null);
   };
 
   // ✅ REPORT ISSUE HANDLER (Linked to Match)
@@ -158,6 +179,18 @@ const Dashboard = () => {
           setIssueText("");
       } catch (err) {
           toast.error("Failed to report.");
+      }
+  };
+
+  // ✅ MARK AS READ FUNCTION
+  const handleMarkAsRead = async (messageId) => {
+      try {
+          await updateDoc(doc(db, "user_inbox", messageId), { 
+              read: true, 
+              readAt: serverTimestamp() 
+          });
+      } catch (error) {
+          console.error("Error marking as read:", error);
       }
   };
 
@@ -233,160 +266,344 @@ const Dashboard = () => {
             ))}
           </div>
 
-          {/* =======================
-              TAB CONTENT: MY MATCHES
-             ======================= */}
+          {/* MATCH FILTER TABS - Only show when activeTab is 'matches' */}
+          {activeTab === 'matches' && (
+            <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
+              {[
+                { id: 'all', label: 'All Matches' },
+                { id: 'upcoming', label: 'Upcoming' },
+                { id: 'won', label: 'Winnings', count: myBookings.filter(b => b.status === 'won').length },
+                { id: 'refund', label: 'Refunds', count: myBookings.filter(b => b.status === 'refund_pending').length },
+                { id: 'completed', label: 'Completed' },
+              ].map(tab => (
+                <button 
+                  key={tab.id} 
+                  onClick={() => setBookingTab(tab.id)}
+                  className={`px-4 py-2 text-xs font-bold rounded-lg transition whitespace-nowrap ${
+                    bookingTab === tab.id 
+                    ? tab.id === 'won' ? 'bg-yellow-500 text-black' 
+                      : tab.id === 'refund' ? 'bg-orange-500 text-black'
+                      : 'bg-brand-green text-black'
+                    : 'bg-white/10 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {tab.label} {tab.count > 0 && <span className="ml-1 bg-black/20 px-1.5 py-0.5 rounded-full text-[10px]">{tab.count}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* ======================= TAB CONTENT: MY MATCHES ======================= */}
           {activeTab === 'matches' && (
             <div className="space-y-6">
-              {myBookings.length === 0 && (
-                <div className="text-center py-20 bg-[#111] rounded-2xl border border-dashed border-white/10">
-                   <AlertTriangle className="mx-auto text-gray-600 mb-2" size={48}/>
-                   <p className="text-gray-500">You haven't booked any slots yet.</p>
-                   <button onClick={() => navigate('/')} className="mt-4 text-brand-green hover:underline">Find a Match</button>
-                </div>
-              )}
-
-              {myBookings.map((booking) => {
-                const match = matchesData[booking.tournamentId] || {};
+              {/* Filter Bookings based on bookingTab */}
+              {(() => {
+                let filteredBookings = myBookings;
                 
-                // --- STATUS HELPERS ---
-                const isWinner = booking.status === 'won';
-                const isRefund = booking.status === 'refund_pending';
-                const isProcessing = booking.status === 'processing' || booking.status === 'refund_processing';
-                const isPaid = booking.status === 'paid';
-                const isRefunded = booking.status === 'refund_paid';
+                switch(bookingTab) {
+                  case 'upcoming':
+                    filteredBookings = myBookings.filter(b => 
+                      b.status === 'approved' || b.status === 'pending'
+                    );
+                    break;
+                  case 'won':
+                    filteredBookings = myBookings.filter(b => 
+                      b.status === 'won' || b.status === 'processing' || b.status === 'paid'
+                    );
+                    break;
+                  case 'refund':
+                    filteredBookings = myBookings.filter(b => 
+                      b.status.includes('refund') || b.status === 'refund_pending' || b.status === 'refund_paid'
+                    );
+                    break;
+                  case 'completed':
+                    filteredBookings = myBookings.filter(b => 
+                      b.status === 'completed' || b.status === 'paid' || b.status === 'refund_paid'
+                    );
+                    break;
+                  default:
+                    // 'all' - show all bookings
+                    break;
+                }
                 
-                const showActionSection = isWinner || isRefund || isProcessing || isPaid || isRefunded;
-                const isRefundFlow = isRefund || booking.status === 'refund_processing' || isRefunded;
-
-                return (
-                  <div key={booking.id} id={`booking-${booking.id}`} className={`bg-[#111] rounded-2xl border overflow-hidden relative transition-all ${isWinner ? 'border-yellow-500/50' : isRefundFlow ? 'border-orange-500/50' : 'border-white/10'}`}>
-                    
-                    {/* Status Badge */}
-                    <div className="absolute top-0 right-0 p-4">
-                      <span className={`px-3 py-1 rounded text-xs font-bold uppercase flex items-center gap-1 ${
-                        isWinner ? 'bg-yellow-500 text-black' : 
-                        isRefundFlow ? 'bg-orange-500 text-black' : 
-                        booking.status === 'approved' ? 'bg-green-500/20 text-green-500' : 'bg-gray-800 text-gray-400'
-                      }`}>
-                        {isWinner ? <Trophy size={12}/> : isRefundFlow ? <DollarSign size={12}/> : null}
-                        {booking.status.replace('_', ' ')}
-                      </span>
+                if (filteredBookings.length === 0) {
+                  return (
+                    <div className="text-center py-20 bg-[#111] rounded-2xl border border-dashed border-white/10">
+                      <AlertTriangle className="mx-auto text-gray-600 mb-2" size={48}/>
+                      <p className="text-gray-500">
+                        {bookingTab === 'won' ? 'No winnings yet. Keep playing!' :
+                         bookingTab === 'refund' ? 'No refund requests.' :
+                         bookingTab === 'upcoming' ? 'No upcoming matches.' :
+                         'You haven\'t booked any slots yet.'}
+                      </p>
+                      {bookingTab !== 'all' && (
+                        <button onClick={() => setBookingTab('all')} className="mt-4 text-brand-green hover:underline">
+                          View All Matches
+                        </button>
+                      )}
                     </div>
+                  );
+                }
+                
+                return filteredBookings.map((booking) => {
+                  const match = matchesData[booking.tournamentId] || {};
+                  
+                  // --- STATUS HELPERS ---
+                  const isWinner = booking.status === 'won';
+                  const isRefund = booking.status === 'refund_pending';
+                  const isProcessing = booking.status === 'processing' || booking.status === 'refund_processing';
+                  const isPaid = booking.status === 'paid';
+                  const isRefunded = booking.status === 'refund_paid';
+                  
+                  const showActionSection = isWinner || isRefund || isProcessing || isPaid || isRefunded;
+                  const isRefundFlow = isRefund || booking.status === 'refund_processing' || isRefunded;
 
-                    <div className="p-6">
-                      <div className="flex flex-col md:flex-row gap-4 justify-between items-start mb-4">
-                        <div>
-                          <h3 className="text-xl font-bold text-white mb-1">{match.title || `Match #${booking.tournamentId}`}</h3>
-                          <div className="flex gap-3 text-xs text-gray-400">
-                             <span className="bg-white/5 px-2 py-0.5 rounded flex items-center gap-1"><MapPin size={10}/> {match.map}</span>
-                             <span className="bg-white/5 px-2 py-0.5 rounded">{match.category}</span>
-                             {match.perKill > 0 && <span className="bg-white/5 px-2 py-0.5 rounded text-brand-green font-bold">Per Kill: ₹{match.perKill}</span>}
+                  return (
+                    <div key={booking.id} id={`booking-${booking.id}`} className={`bg-[#111] rounded-2xl border overflow-hidden relative transition-all ${isWinner ? 'border-yellow-500/50' : isRefundFlow ? 'border-orange-500/50' : 'border-white/10'}`}>
+                      
+                      {/* Status Badge */}
+                      <div className="absolute top-0 right-0 p-4">
+                        <span className={`px-3 py-1 rounded text-xs font-bold uppercase flex items-center gap-1 ${
+                          isWinner ? 'bg-yellow-500 text-black' : 
+                          isRefundFlow ? 'bg-orange-500 text-black' : 
+                          booking.status === 'approved' ? 'bg-green-500/20 text-green-500' : 'bg-gray-800 text-gray-400'
+                        }`}>
+                          {isWinner ? <Trophy size={12}/> : isRefundFlow ? <DollarSign size={12}/> : null}
+                          {booking.status.replace('_', ' ')}
+                        </span>
+                      </div>
+
+                      <div className="p-6">
+                        <div className="flex flex-col md:flex-row gap-4 justify-between items-start mb-4">
+                          <div>
+                            <h3 className="text-xl font-bold text-white mb-1">{match.title || `Match #${booking.tournamentId}`}</h3>
+                            <div className="flex gap-3 text-xs text-gray-400">
+                               <span className="bg-white/5 px-2 py-0.5 rounded flex items-center gap-1"><MapPin size={10}/> {match.map}</span>
+                               <span className="bg-white/5 px-2 py-0.5 rounded">{match.category}</span>
+                               {match.perKill > 0 && <span className="bg-white/5 px-2 py-0.5 rounded text-brand-green font-bold">Per Kill: ₹{match.perKill}</span>}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* --- ACTION ZONE (WINNER OR REFUND) --- */}
-                      {showActionSection && (
-                        <div className={`mb-6 p-4 rounded-r-lg border-l-4 ${isRefundFlow ? 'bg-orange-500/10 border-orange-500' : 'bg-yellow-500/10 border-yellow-500'}`}>
-                          <h4 className={`font-bold text-lg flex items-center gap-2 mb-2 ${isRefundFlow ? 'text-orange-500' : 'text-yellow-500'}`}>
-                            {isRefundFlow ? <><AlertTriangle size={20}/> MATCH CANCELLED - REFUND</> : <><Trophy size={20}/> CONGRATULATIONS! YOU WON</>}
-                          </h4>
-                          
-                          {/* 1. UPLOAD QR FORM */}
-                          {(isWinner || isRefund) && (
-                            <div className="mt-3">
-                              <p className="text-gray-300 text-sm mb-3">
-                                {isRefundFlow ? 'We are sorry! Upload QR to get instant refund of ' : 'Great Game! Upload QR to claim prize of '} 
-                                <span className="font-bold text-white">₹{booking.prizeAmount || match.fee}</span>
-                              </p>
-                              <div className="flex gap-2 items-center">
-                                <label className={`cursor-pointer text-black px-4 py-2 rounded-lg font-bold text-sm hover:bg-white transition flex items-center gap-2 ${isRefundFlow ? 'bg-orange-500' : 'bg-yellow-500'}`}>
-                                   <Upload size={16}/> {qrFile ? "Change QR" : "Select QR"}
-                                   <input type="file" className="hidden" onChange={e => setQrFile(e.target.files[0])} accept="image/*"/>
-                                </label>
-                                {qrFile && (
-                                  <button onClick={() => handleQrSubmit(booking.id, isRefundFlow)} disabled={uploadingId === booking.id} className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-green-500 transition">
-                                    {uploadingId === booking.id ? "Uploading..." : "Submit to Admin"}
-                                  </button>
-                                )}
+                        {/* --- ACTION ZONE (WINNER OR REFUND) --- */}
+                        {showActionSection && (
+                          <div className={`mb-6 p-4 rounded-r-lg border-l-4 ${isRefundFlow ? 'bg-orange-500/10 border-orange-500' : 'bg-yellow-500/10 border-yellow-500'}`}>
+                            <h4 className={`font-bold text-lg flex items-center gap-2 mb-2 ${isRefundFlow ? 'text-orange-500' : 'text-yellow-500'}`}>
+                              {isRefundFlow ? <><AlertTriangle size={20}/> MATCH CANCELLED - REFUND</> : <><Trophy size={20}/> CONGRATULATIONS! YOU WON</>}
+                            </h4>
+                            
+                            {/* 1. UPLOAD QR FORM - Only show if QR not uploaded */}
+                            {(isWinner || isRefund) && !booking.userQr && (
+                              <div className="mt-3 p-4 bg-white/5 rounded-xl border border-dashed border-white/10">
+                                <p className="text-gray-300 text-sm mb-3">
+                                  {isRefundFlow 
+                                    ? 'Upload your UPI QR code to receive refund of ' 
+                                    : 'Upload your UPI QR code to claim prize of '} 
+                                  <span className="font-bold text-white">₹{booking.prizeAmount || match.fee || 0}</span>
+                                </p>
+                                
+                                <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+                                  <div className="flex-1">
+                                    <label className={`cursor-pointer inline-block px-4 py-2 rounded-lg font-bold text-sm transition flex items-center gap-2 ${
+                                      qrFile 
+                                        ? 'bg-green-600 text-white' 
+                                        : isRefundFlow ? 'bg-orange-500 text-white' : 'bg-yellow-500 text-black'
+                                    }`}>
+                                      <Upload size={16}/> 
+                                      {qrFile ? `Selected: ${qrFile.name.substring(0, 15)}...` : "Choose QR Image"}
+                                      <input type="file" className="hidden" onChange={e => setQrFile(e.target.files[0])} accept="image/*"/>
+                                    </label>
+                                  </div>
+                                  
+                                  <div className="flex gap-2">
+                                    {qrFile && (
+                                      <button 
+                                        onClick={() => handleQrSubmit(booking.id, isRefundFlow)} 
+                                        disabled={uploadingId === booking.id}
+                                        className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-green-500 transition flex items-center gap-2"
+                                      >
+                                        {uploadingId === booking.id ? (
+                                          <>
+                                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                            Uploading...
+                                          </>
+                                        ) : (
+                                          <>📤 Submit QR</>
+                                        )}
+                                      </button>
+                                    )}
+                                    
+                                    {qrFile && (
+                                      <button 
+                                        onClick={() => setQrFile(null)}
+                                        className="px-3 py-2 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30"
+                                        title="Cancel"
+                                      >
+                                        ✕
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                <p className="text-gray-500 text-xs mt-3">
+                                  ⚡ Admin will verify and send payment within 24 hours
+                                </p>
                               </div>
-                            </div>
-                          )}
+                            )}
 
-                          {/* 2. PROCESSING STATE */}
-                          {isProcessing && (
-                            <div className="flex items-center gap-3 mt-2">
-                               <Clock className={isRefundFlow ? 'text-orange-500' : 'text-yellow-500'} size={20}/>
-                               <p className="text-gray-300 text-sm">Verifying QR... Payment will be sent soon.</p>
-                            </div>
-                          )}
+                            {/* 2. QR ALREADY UPLOADED STATE */}
+                            {(isWinner || isRefund) && booking.userQr && !isPaid && !isRefunded && (
+                              <div className="mt-3 p-3 bg-green-900/20 border border-green-500/30 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                  <CheckCircle className="text-green-500" size={20}/>
+                                  <div>
+                                    <p className="text-green-400 font-bold text-sm">QR Code Submitted!</p>
+                                    <p className="text-gray-300 text-xs">
+                                      Your UPI QR has been sent to admin for verification.
+                                      <a href={booking.userQr} target="_blank" rel="noreferrer" className="ml-2 text-blue-400 hover:underline flex items-center gap-1">
+                                        <Eye size={10}/> View QR
+                                      </a>
+                                    </p>
+                                    {booking.qrUploadedAt && (
+                                      <p className="text-gray-500 text-[10px] mt-1">
+                                        Submitted: {new Date(booking.qrUploadedAt.seconds * 1000).toLocaleString()}
+                                      </p>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
 
-                          {/* 3. PAID / REFUNDED STATE */}
-                          {(isPaid || isRefunded) && (
-                            <div className="mt-2 flex items-center gap-3">
-                               <CheckCircle className="text-green-500" size={20}/>
-                               <div>
-                                 <p className="text-green-400 font-bold text-sm">{isRefundFlow ? 'REFUND SUCCESSFUL' : 'PRIZE PAID'}</p>
-                                 {booking.paymentProof && <a href={booking.paymentProof} target="_blank" className="text-blue-400 text-xs hover:underline flex gap-1 items-center"><Eye size={10}/> View Proof</a>}
-                               </div>
-                            </div>
-                          )}
+                            {/* 3. PROCESSING STATE */}
+                            {isProcessing && (
+                              <div className="mt-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+                                <div className="flex items-center gap-3">
+                                  <Clock className={isRefundFlow ? 'text-orange-500' : 'text-yellow-500'} size={20}/>
+                                  <div>
+                                    <p className="text-blue-400 font-bold text-sm">Payment Processing</p>
+                                    <p className="text-gray-300 text-xs">
+                                      Your QR is being verified. Payment will be sent soon.
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* 4. PAID / REFUNDED STATE */}
+                            {(isPaid || isRefunded) && (
+                              <div className="mt-2 flex items-center gap-3">
+                                <CheckCircle className="text-green-500" size={20}/>
+                                <div>
+                                  <p className="text-green-400 font-bold text-sm">{isRefundFlow ? 'REFUND SUCCESSFUL' : 'PRIZE PAID'}</p>
+                                  {booking.paymentProof && <a href={booking.paymentProof} target="_blank" className="text-blue-400 text-xs hover:underline flex gap-1 items-center"><Eye size={10}/> View Proof</a>}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* DETAILED INFO GRID */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs">
+                           <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Time</span><span className="text-white">{match.time ? new Date(match.time).toLocaleString() : 'TBA'}</span></div>
+                           <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Prize Pool</span><span className="text-white">₹{match.prizePool}</span></div>
+                           <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">ID/Pass</span><span className={match.status === 'ID Released' ? 'text-green-500 font-bold' : 'text-gray-500'}>{match.status === 'ID Released' ? 'RELEASED' : 'WAITING'}</span></div>
+                           <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Slot</span><span className="text-white">{booking.slotNo || 'Pending'}</span></div>
                         </div>
-                      )}
 
-                      {/* DETAILED INFO GRID */}
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 text-xs">
-                         <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Time</span><span className="text-white">{match.time ? new Date(match.time).toLocaleString() : 'TBA'}</span></div>
-                         <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Prize Pool</span><span className="text-white">₹{match.prizePool}</span></div>
-                         <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">ID/Pass</span><span className={match.status === 'ID Released' ? 'text-green-500 font-bold' : 'text-gray-500'}>{match.status === 'ID Released' ? 'RELEASED' : 'WAITING'}</span></div>
-                         <div className="bg-black/40 p-2 rounded border border-white/5"><span className="text-gray-500 block mb-1">Slot</span><span className="text-white">{booking.slotNo || 'Pending'}</span></div>
+                        {/* ID/PASS DISPLAY */}
+                        {booking.status === 'approved' && match.status === 'ID Released' && (
+                          <div className="bg-[#0a0a0a] border border-brand-green/30 p-4 rounded-xl mb-4 relative overflow-hidden">
+                             <div className="absolute top-0 right-0 bg-brand-green text-black text-[9px] font-bold px-2 py-0.5 rounded-bl">LIVE</div>
+                             <div className="grid grid-cols-2 gap-4">
+                                <div><p className="text-gray-500 text-[10px]">ROOM ID</p><div className="flex items-center gap-2"><p className="text-white font-mono font-bold select-all">{match.roomId}</p><Copy size={12} className="text-brand-green cursor-pointer" onClick={() => copyToClipboard(match.roomId)}/></div></div>
+                                <div><p className="text-gray-500 text-[10px]">PASSWORD</p><div className="flex items-center gap-2"><p className="text-white font-mono font-bold select-all">{match.password}</p><Copy size={12} className="text-brand-green cursor-pointer" onClick={() => copyToClipboard(match.password)}/></div></div>
+                             </div>
+                          </div>
+                        )}
+
+                        {/* ADMIN MESSAGE */}
+                        {booking.adminMessage && (
+                          <div className="bg-blue-900/10 border border-blue-500/20 p-3 rounded-lg mb-4 animate-pulse">
+                            <p className="text-blue-400 text-xs font-bold flex items-center gap-2 mb-1"><Bell size={12}/> ADMIN MESSAGE</p>
+                            <p className="text-gray-300 text-sm bg-black/50 p-2 rounded">{booking.adminMessage}</p>
+                          </div>
+                        )}
+
+                        {/* REPORT ISSUE BUTTON */}
+                        <div className="flex justify-between items-center mt-4 pt-4 border-t border-white/5">
+                           <div className="text-xs text-gray-500">Ref: {booking.id.slice(0,8)}</div>
+                           <button onClick={() => setReportMatch(booking)} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1 border border-red-500/20 px-3 py-1 rounded hover:bg-red-500/10 transition">
+                              <AlertTriangle size={12}/> Report Issue
+                           </button>
+                        </div>
+
                       </div>
-
-                      {/* ID/PASS DISPLAY */}
-                      {booking.status === 'approved' && match.status === 'ID Released' && (
-                        <div className="bg-[#0a0a0a] border border-brand-green/30 p-4 rounded-xl mb-4 relative overflow-hidden">
-                           <div className="absolute top-0 right-0 bg-brand-green text-black text-[9px] font-bold px-2 py-0.5 rounded-bl">LIVE</div>
-                           <div className="grid grid-cols-2 gap-4">
-                              <div><p className="text-gray-500 text-[10px]">ROOM ID</p><div className="flex items-center gap-2"><p className="text-white font-mono font-bold select-all">{match.roomId}</p><Copy size={12} className="text-brand-green cursor-pointer" onClick={() => copyToClipboard(match.roomId)}/></div></div>
-                              <div><p className="text-gray-500 text-[10px]">PASSWORD</p><div className="flex items-center gap-2"><p className="text-white font-mono font-bold select-all">{match.password}</p><Copy size={12} className="text-brand-green cursor-pointer" onClick={() => copyToClipboard(match.password)}/></div></div>
-                           </div>
-                        </div>
-                      )}
-
-                      {/* ADMIN MESSAGE */}
-                      {booking.adminMessage && (
-                        <div className="bg-blue-900/10 border border-blue-500/20 p-3 rounded-lg mb-4 animate-pulse">
-                          <p className="text-blue-400 text-xs font-bold flex items-center gap-2 mb-1"><Bell size={12}/> ADMIN MESSAGE</p>
-                          <p className="text-gray-300 text-sm bg-black/50 p-2 rounded">{booking.adminMessage}</p>
-                        </div>
-                      )}
-
-                      {/* REPORT ISSUE BUTTON */}
-                      <div className="flex justify-between items-center mt-4 pt-4 border-t border-white/5">
-                         <div className="text-xs text-gray-500">Ref: {booking.id.slice(0,8)}</div>
-                         <button onClick={() => setReportMatch(booking)} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1 border border-red-500/20 px-3 py-1 rounded hover:bg-red-500/10 transition">
-                            <AlertTriangle size={12}/> Report Issue
-                         </button>
-                      </div>
-
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           )}
 
           {/* --- TAB: INBOX --- */}
           {activeTab === 'inbox' && (
              <div className="space-y-4">
+                <div className="flex justify-between items-center mb-4">
+                  <p className="text-gray-500 text-sm">
+                    {unreadCount > 0 ? `${unreadCount} unread message${unreadCount > 1 ? 's' : ''}` : 'All caught up!'}
+                  </p>
+                  {unreadCount > 0 && (
+                    <button 
+                      onClick={async () => {
+                        const unreadMessages = inboxMessages.filter(msg => !msg.read);
+                        for (const msg of unreadMessages) {
+                          await handleMarkAsRead(msg.id);
+                        }
+                        toast.success("Marked all as read");
+                      }}
+                      className="text-xs text-brand-green hover:underline"
+                    >
+                      Mark all as read
+                    </button>
+                  )}
+                </div>
+                
                 {inboxMessages.length === 0 && <p className="text-gray-500 text-center py-10">No messages.</p>}
                 {inboxMessages.map(msg => (
-                   <div key={msg.id} className={`bg-[#111] p-5 rounded-xl border ${msg.read ? 'border-white/5' : 'border-brand-green/30'} relative`}>
-                      {!msg.read && <span className="absolute top-4 right-4 w-2 h-2 bg-red-500 rounded-full"></span>}
-                      <h3 className="text-white font-bold text-lg mb-1">{msg.title}</h3>
-                      <p className="text-gray-500 text-xs mb-2">{msg.timestamp ? new Date(msg.timestamp.seconds * 1000).toLocaleString() : ''}</p>
-                      <p className="text-gray-300 text-sm bg-black/30 p-3 rounded">{msg.message}</p>
+                   <div 
+                     key={msg.id} 
+                     className={`bg-[#111] p-5 rounded-xl border cursor-pointer transition-all hover:border-brand-green/30 ${
+                       msg.read ? 'border-white/5' : 'border-brand-green/50 bg-brand-green/5'
+                     }`}
+                     onClick={() => {
+                       if (!msg.read) handleMarkAsRead(msg.id);
+                     }}
+                   >
+                     <div className="flex justify-between items-start mb-2">
+                       <div className="flex items-center gap-2">
+                         <h3 className="text-white font-bold text-lg">{msg.title}</h3>
+                         {!msg.read && (
+                           <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                         )}
+                       </div>
+                       <span className="text-gray-600 text-xs">
+                         {msg.timestamp ? new Date(msg.timestamp.seconds * 1000).toLocaleDateString() : ''}
+                       </span>
+                     </div>
+                     <p className="text-gray-500 text-xs mb-2">
+                       {msg.type === 'direct' ? '📨 Direct Message' : 
+                        msg.type === 'reply' ? '💬 Admin Reply' : 
+                        '📢 Announcement'}
+                     </p>
+                     <p className="text-gray-300 text-sm bg-black/30 p-3 rounded">{msg.message}</p>
+                     
+                     {msg.tournamentId && (
+                       <div className="mt-3 pt-3 border-t border-white/10">
+                         <p className="text-gray-500 text-xs">
+                           Related to: Match #{msg.tournamentId?.slice(0,6)}
+                         </p>
+                       </div>
+                     )}
                    </div>
                 ))}
              </div>
