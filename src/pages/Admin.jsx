@@ -1552,6 +1552,64 @@ const handleMarkPaid = async (bookingId, userId, amount, isRefund = false) => {
              </div>
           </div>
         )}
+        {/* --- TEAM MANAGEMENT VIEW --- */}
+{activeSection === 'team' && userRole === 'super_admin' && (
+    <div className="max-w-4xl mx-auto space-y-6">
+        <div className="bg-[#111] border border-white/10 p-6 rounded-2xl">
+            <h3 className="text-white font-bold mb-4 flex items-center gap-2">
+                <UserPlus size={20} className="text-brand-green"/> CREATE NEW ADMIN
+            </h3>
+            <form onSubmit={handleCreateAdmin} className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <input 
+                    type="text" placeholder="Name" required
+                    className="bg-black border border-white/20 p-3 rounded text-white outline-none focus:border-brand-green"
+                    value={newAdmin.name} onChange={e => setNewAdmin({...newAdmin, name: e.target.value})}
+                />
+                <input 
+                    type="email" placeholder="Email" required
+                    className="bg-black border border-white/20 p-3 rounded text-white outline-none focus:border-brand-green"
+                    value={newAdmin.email} onChange={e => setNewAdmin({...newAdmin, email: e.target.value})}
+                />
+                <input 
+                    type="password" placeholder="Password" required
+                    className="bg-black border border-white/20 p-3 rounded text-white outline-none focus:border-brand-green"
+                    value={newAdmin.password} onChange={e => setNewAdmin({...newAdmin, password: e.target.value})}
+                />
+                <button className="md:col-span-3 bg-brand-green text-black font-bold py-3 rounded-lg hover:bg-white transition">
+                    CREATE ADMIN ACCOUNT
+                </button>
+            </form>
+        </div>
+
+        {/* Admin List Table */}
+        <div className="bg-[#111] border border-white/10 rounded-2xl overflow-hidden">
+            <table className="w-full text-left border-collapse">
+                <thead className="bg-white/5 text-xs text-gray-500 uppercase">
+                    <tr>
+                        <th className="p-4">Name</th>
+                        <th className="p-4">Email</th>
+                        <th className="p-4 text-right">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {adminList.map(adm => (
+                        <tr key={adm.id} className="border-t border-white/5">
+                            <td className="p-4 text-white font-bold">{adm.name}</td>
+                            <td className="p-4 text-gray-400">{adm.email}</td>
+                            <td className="p-4 text-right">
+                                {adm.email !== SUPER_ADMIN_EMAIL && (
+                                    <button onClick={() => handleDeleteAdmin(adm.id, adm.email)} className="text-red-500 hover:bg-red-500/10 p-2 rounded">
+                                        <Trash2 size={16}/>
+                                    </button>
+                                )}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+)}
 
         {/* ================= MODALS ================= */}
         
